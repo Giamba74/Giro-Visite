@@ -4,4 +4,3 @@ geopy
 folium
 streamlit-folium
 openpyxl
-shworksheet
