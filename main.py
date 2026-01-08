@@ -9,7 +9,7 @@ import time
 # --- CONFIGURAZIONE ---
 SEDE_INDIRIZZO = "Via G. Ferrero 122, Strada in Chianti, FI, Italy"
 SEDE_COORDS = (43.6558, 11.3103)
-URL_SHEET = "INCOLLA_QUI_IL_TUO_LINK_DI_GOOGLE_SHEETS"
+URL_SHEET = "https://docs.google.com/spreadsheets/d/1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0/edit?usp=sharing"
 
 st.set_page_config(page_title="Giro Visite Pro", page_icon="🚚", layout="wide")
 
@@ -116,6 +116,7 @@ if raw_df is not None:
                 col_a.write(f"{p['Indirizzo']} - {p['Comune']}")
                 q = f"{p['Indirizzo']}, {p['Comune']}, Italy".replace(' ', '+')
                 col_b.link_button("🧭 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={q}&travelmode=driving")
+
 
 
 
