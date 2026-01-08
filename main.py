@@ -78,7 +78,7 @@ st.markdown("""
 # --- CONFIGURAZIONE DATI ---
 SEDE_NOME = "⭐ SEDE BRIGHTSTAR"
 SEDE_COORDS = (43.661888, 11.305728) 
-URL_SHEET = "INCOLLA_QUI_IL_TUO_LINK_DI_GOOGLE_SHEETS"
+URL_SHEET = "https://docs.google.com/spreadsheets/d/1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0/edit?usp=sharing"
 
 @st.cache_data(ttl=3600)
 def get_coords_smart(indirizzo, comune, cap):
@@ -174,3 +174,4 @@ if df is not None:
         st.success("🏁 Itinerario concluso. Buon lavoro!")
 else:
     st.error("Errore nel collegamento dati. Controlla il link Google Sheets.")
+
