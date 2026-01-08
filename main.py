@@ -7,39 +7,27 @@ from streamlit_folium import st_folium
 import time
 
 # --- CONFIGURAZIONE E STILE BRIGHTSTAR ---
-st.set_page_config(page_title="Brightstar Visite", page_icon="⭐", layout="wide")
+st.set_page_config(page_title="Brightstar Dynamic", page_icon="⭐", layout="wide")
 
 st.markdown("""
     <style>
     .stApp { background-color: #001a41; }
-    h1 { color: #FFD700 !important; text-align: center; border-bottom: 3px solid #FFD700; padding-bottom: 10px; }
-    .stButton>button {
-        width: 100%; border-radius: 12px; height: 3.5em;
-        background: linear-gradient(135deg, #FFD700 0%, #C5A000 100%);
-        color: #002D72 !important; font-weight: bold; border: 1px solid #FFFFFF;
-    }
-    .tappa-card {
-        padding: 15px; border-radius: 12px; background-color: #002D72;
-        border-left: 8px solid #FFD700; margin-bottom: 10px;
-    }
-    .tappa-header { color: #FFD700; font-weight: bold; }
-    .tappa-info { color: #FFFFFF; font-size: 0.9em; }
+    h1 { color: #FFD700 !important; text-align: center; border-bottom: 3px solid #FFD700; }
+    .stButton>button { width: 100%; border-radius: 12px; background: linear-gradient(135deg, #FFD700 0%, #C5A000 100%); color: #002D72 !important; font-weight: bold; }
+    .tappa-card { padding: 15px; border-radius: 12px; background-color: #002D72; border-left: 8px solid #FFD700; margin-bottom: 5px; }
+    .delete-btn button { background-color: #ff4b4b !important; color: white !important; height: 2em !important; font-size: 12px !important; }
     [data-testid="stSidebar"] { background-color: #00122e; border-right: 1px solid #FFD700; }
-    label { color: #FFD700 !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- CONFIGURAZIONE ---
 SEDE_COORDS = (43.661888, 11.305728)
 URL_SHEET = "https://docs.google.com/spreadsheets/d/1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0/edit?usp=sharing"
 
 @st.cache_data(ttl=3600)
-def get_coords_smart(indirizzo, comune, cap):
-    geolocator = Nominatim(user_agent="brightstar_final_v20")
-    query = f"{str(indirizzo)}, {str(cap)}, {str(comune)}, Italy"
+def get_coords(indirizzo, comune, cap):
+    geolocator = Nominatim(user_agent="brightstar_dynamic_v21")
     try:
-        loc = geolocator.geocode(query, timeout=8)
-        if not loc: loc = geolocator.geocode(f"{str(indirizzo)}, {str(comune)}, Italy", timeout=8)
+        loc = geolocator.geocode(f"{indirizzo}, {cap}, {comune}, Italy", timeout=8)
         return (loc.latitude, loc.longitude) if loc else None
     except: return None
 
@@ -49,105 +37,101 @@ def load_data(url):
         df = pd.read_csv(path)
         df.columns = [str(c).strip().upper() for c in df.columns]
         mappa = {c: "Cliente" if "CLIENTE" in c else "Indirizzo" if "INDIRIZZO" in c else "CAP" if "CAP" in c else "Comune" if "COMUNE" in c else "Visitato" if "VISITATO" in c else c for c in df.columns}
-        df = df.rename(columns=mappa)
-        return df
+        return df.rename(columns=mappa)
     except: return None
 
-# --- UI PRINCIPALE ---
-st.title("⭐ BRIGHTSTAR VISITE PRO")
+# --- LOGICA DI SOSTITUZIONE ---
+def elimina_e_sostituisci(index_to_remove):
+    current_giro = st.session_state.giro_igt
+    # Rimuoviamo il cliente
+    current_giro.pop(index_to_remove)
+    
+    # Cerchiamo un sostituto tra i non visitati e non presenti nel giro
+    nomi_nel_giro = [p['Cliente'] for p in current_giro]
+    mask = ~st.session_state.df_all['Visitato'].astype(str).str.upper().str.strip().isin(['SÌ', 'SI', 'S'])
+    mask &= ~st.session_state.df_all['Cliente'].isin(nomi_nel_giro)
+    
+    potenziali = st.session_state.df_all[mask].head(10).to_dict('records')
+    
+    # Troviamo il più vicino all'ultima tappa rimasta o alla sede
+    pos_rif = current_giro[-1]['coords'] if current_giro else SEDE_COORDS
+    
+    nuovo_cliente = None
+    for p in potenziali:
+        coords = get_coords(p['Indirizzo'], p['Comune'], p['CAP'])
+        if coords:
+            p['coords'] = coords
+            nuovo_cliente = p
+            break
+            
+    if nuovo_cliente:
+        current_giro.append(nuovo_cliente)
+        st.session_state.giro_igt = current_giro
+        st.toast(f"✅ Sostituito con {nuovo_cliente['Cliente']}")
+    else:
+        st.warning("Nessun sostituto trovato nelle vicinanze.")
+
+# --- UI ---
+st.title("⭐ BRIGHTSTAR DYNAMIC")
 df = load_data(URL_SHEET)
 
 if df is not None:
-    # Pulizia dati per i filtri
-    df['Comune'] = df['Comune'].fillna("N/D")
-    df['CAP'] = df['CAP'].fillna("N/D").astype(str)
-    
+    st.session_state.df_all = df
     with st.sidebar:
         st.image("https://www.brightstarlottery.co.uk/wp-content/uploads/2021/05/brightstar-logo-white.png", width=180)
-        st.divider()
-        
-        st.markdown("### 🛠️ OPZIONI GIRO")
-        # Filtri zona
-        comuni = sorted(df['Comune'].unique().tolist())
-        sel_comune = st.selectbox("1. Filtra per Comune:", ["Tutti"] + comuni)
-        
-        # Filtro per selezione manuale (IL MENU A TENDINA)
-        st.divider()
-        st.markdown("### 📌 CLIENTI FORZATI")
-        clienti_disponibili = sorted(df['Cliente'].unique().tolist())
-        forzati_manuali = st.multiselect("Scegli i clienti obbligatori di oggi:", clienti_disponibili)
-        
-    # --- LOGICA DI GENERAZIONE ---
-    if st.button("🚀 GENERA PERCORSO OTTIMIZZATO"):
-        with st.status("🌟 Elaborazione itinerario veloce...", expanded=True) as status:
-            giro_finale = []
+        comuni = sorted(df['Comune'].fillna("N/D").unique().tolist())
+        sel_comune = st.selectbox("Filtra Zona:", ["Tutti"] + comuni)
+        forzati = st.multiselect("Clienti Obbligatori:", sorted(df['Cliente'].unique().tolist()))
+
+    if st.button("🚀 GENERA GIRO INIZIALE"):
+        # Logica generazione (uguale alla precedente ma salva in session_state)
+        with st.status("Calcolo..."):
+            giro = []
+            selezionati = df[df['Cliente'].isin(forzati)].to_dict('records')
+            for r in selezionati:
+                c = get_coords(r['Indirizzo'], r['Comune'], r['CAP'])
+                if c: r['coords'] = c; giro.append(r)
             
-            # 1. Carichiamo prima i forzati manuali
-            df_forzati = df[df['Cliente'].isin(forzati_manuali)].to_dict('records')
-            for row in df_forzati:
-                coords = get_coords_smart(row['Indirizzo'], row['Comune'], row['CAP'])
-                if coords:
-                    row['coords'] = coords
-                    giro_finale.append(row)
-            
-            # 2. Se mancano tappe (per arrivare a 10), cerchiamo le migliori nella zona scelta
-            posti_residui = 10 - len(giro_finale)
-            if posti_residui > 0:
+            posti = 10 - len(giro)
+            if posti > 0:
                 mask = ~df['Visitato'].astype(str).str.upper().str.strip().isin(['SÌ', 'SI', 'S'])
-                mask &= ~df['Cliente'].isin(forzati_manuali) # Escludi quelli già scelti
+                mask &= ~df['Cliente'].isin([x['Cliente'] for x in giro])
                 if sel_comune != "Tutti": mask &= (df['Comune'] == sel_comune)
-                
-                potenziali = df[mask].head(20).to_dict('records')
-                clienti_extra = []
-                for row in potenziali:
-                    coords = get_coords_smart(row['Indirizzo'], row['Comune'], row['CAP'])
-                    if coords:
-                        row['coords'] = coords
-                        clienti_extra.append(row)
-                    if len(clienti_extra) >= posti_residui: break
-                
-                # Uniamo tutto
-                tutti_i_selezionati = giro_finale + clienti_extra
-            else:
-                tutti_i_selezionati = giro_finale
+                extra = df[mask].head(15).to_dict('records')
+                for r in extra:
+                    if len(giro) >= 10: break
+                    c = get_coords(r['Indirizzo'], r['Comune'], r['CAP'])
+                    if c: r['coords'] = c; giro.append(r)
+            
+            # Ottimizzazione
+            giro_opt = []
+            pos = SEDE_COORDS
+            while giro:
+                prox = min(giro, key=lambda x: geodesic(pos, x['coords']).km)
+                giro_opt.append(prox)
+                pos = prox['coords']
+                giro.remove(prox)
+            st.session_state.giro_igt = giro_opt
 
-            # 3. OTTIMIZZAZIONE PERCORSO (Nearest Neighbor)
-            itinerario_ordinato = []
-            pos_attuale = SEDE_COORDS
-            distanza_totale = 0
-            
-            while tutti_i_selezionati:
-                prossimo = min(tutti_i_selezionati, key=lambda x: geodesic(pos_attuale, x['coords']).km)
-                distanza_totale += geodesic(pos_attuale, prossimo['coords']).km
-                itinerario_ordinato.append(prossimo)
-                pos_attuale = prossimo['coords']
-                tutti_i_selezionati.remove(prossimo)
-            
-            # Rientro a casa
-            distanza_totale += geodesic(pos_attuale, SEDE_COORDS).km
-            
-            st.session_state.giro_igt = itinerario_ordinato
-            st.session_state.km_igt = round(distanza_totale, 1)
-            status.update(label=f"✅ Itinerario di {st.session_state.km_igt} km pronto!", state="complete")
-
-    # --- MAPPA E LISTA WAZE ---
+    # --- DISPLAY DINAMICO ---
     if 'giro_igt' in st.session_state:
-        st.info(f"🛣️ Percorso ottimizzato inclusi clienti scelti: **{st.session_state.km_igt} km**")
-        
+        # Mappa
         m = folium.Map(location=SEDE_COORDS, zoom_start=11)
         punti = [SEDE_COORDS] + [p['coords'] for p in st.session_state.giro_igt] + [SEDE_COORDS]
-        folium.PolyLine(punti, color="#FFD700", weight=5).add_to(m)
-        folium.Marker(SEDE_COORDS, icon=folium.Icon(color='darkblue', icon='star')).add_to(m)
-        
-        for i, p in enumerate(st.session_state.giro_igt):
-            folium.Marker(p['coords'], popup=p['Cliente']).add_to(m)
-        
-        st_folium(m, width="100%", height=400)
+        folium.PolyLine(punti, color="#FFD700", weight=4).add_to(m)
+        st_folium(m, width="100%", height=300, key="map")
 
+        st.markdown("### 📋 Gestione Tappe")
         for i, p in enumerate(st.session_state.giro_igt):
-            st.markdown(f"""<div class="tappa-card"><div class="tappa-header">TAPPA {i+1}: {p['Cliente']}</div>
-                        <div class="tappa-info">📍 {p['Indirizzo']} ({p['Comune']})</div></div>""", unsafe_allow_html=True)
-            addr_waze = f"{p['Indirizzo']} {p['Comune']}".replace(' ', '%20')
-            st.link_button(f"🚙 NAVIGA CON WAZE", f"https://waze.com/ul?q={addr_waze}&navigate=yes", use_container_width=True)
-else:
-    st.error("Connessione ai dati fallita.")
+            col_info, col_del = st.columns([4, 1])
+            with col_info:
+                st.markdown(f"""<div class="tappa-card"><b>{i+1}. {p['Cliente']}</b><br><small>{p['Indirizzo']} ({p['Comune']})</small></div>""", unsafe_allow_html=True)
+            with col_del:
+                if st.button("❌", key=f"del_{i}"):
+                    elimina_e_sostituisci(i)
+                    st.rerun()
+            
+            # Navigazione
+            addr = f"{p['Indirizzo']} {p['Comune']}".replace(' ', '%20')
+            st.link_button(f"🚙 NAVIGA VERSO {p['Cliente']}", f"https://waze.com/ul?q={addr}&navigate=yes")
+            st.write("---")
