@@ -16,10 +16,8 @@ st.set_page_config(page_title="Giro Visite Pro", page_icon="🚚", layout="wide"
 @st.cache_data(ttl=600)
 def get_coords(address, comune):
     try:
-        # Uniamo indirizzo e comune per maggiore precisione
         full_address = f"{address}, {comune}, Italy"
-        geolocator = Nominatim(user_agent="pixel9_pro_final_tester")
-        # Aumentato il timeout a 10 secondi per evitare blocchi
+        geolocator = Nominatim(user_agent="pixel9_pro_final_v4")
         loc = geolocator.geocode(full_address, timeout=10)
         return (loc.latitude, loc.longitude) if loc else None
     except:
@@ -28,7 +26,10 @@ def get_coords(address, comune):
 def load_data(url):
     try:
         path = url.split("/edit")[0] + "/export?format=csv"
-        return pd.read_csv(path)
+        df = pd.read_csv(path)
+        # Rimuove eventuali colonne completamente vuote o righe vuote
+        df = df.dropna(how='all', axis=0).dropna(how='all', axis=1)
+        return df
     except Exception as e:
         st.error(f"Errore caricamento: {e}")
         return None
@@ -38,16 +39,37 @@ st.title("🚚 Pianificatore Visite")
 raw_df = load_data(URL_SHEET)
 
 if raw_df is not None:
+    # --- SISTEMA DI MAPPATURA COLONNE INTELLIGENTE ---
     df = raw_df.copy()
-    df.columns = df.columns.astype(str).str.strip()
     
-    # Uniformiamo nomi colonne
-    rename_dict = {col: col.capitalize() for col in df.columns if col.lower() in ['cliente', 'indirizzo', 'cap', 'comune', 'visitato']}
-    df = df.rename(columns=rename_dict)
+    # Pulizia nomi colonne (rimozione spazi e caratteri invisibili)
+    df.columns = [str(c).strip().upper() for c in df.columns]
+    
+    # Mappatura flessibile
+    mappa = {}
+    for col in df.columns:
+        if "CLIENTE" in col: mappa[col] = "Cliente"
+        elif "INDIRIZZO" in col: mappa[col] = "Indirizzo"
+        elif "CAP" in col: mappa[col] = "CAP"
+        elif "COMUNE" in col: mappa[col] = "Comune"
+        elif "VISITATO" in col: mappa[col] = "Visitato"
+    
+    df = df.rename(columns=mappa)
+    
+    # Verifica colonne fondamentali
+    fondamentali = ["Cliente", "Indirizzo", "CAP", "Comune"]
+    mancanti = [c for c in fondamentali if c not in df.columns]
+    
+    if mancanti:
+        st.error(f"❌ Non trovo le colonne: {mancanti}")
+        st.write("Colonne trovate nel tuo file:", list(df.columns))
+        st.stop()
 
-    if 'Visitato' not in df.columns: df['Visitato'] = 'No'
-    df['Comune'] = df['Comune'].astype(str).str.upper().str.strip()
-    df['CAP'] = df['CAP'].astype(str).str.replace('.0', '', regex=False).str.strip()
+    # Pulizia dati per evitare altri KeyError
+    if "Visitato" not in df.columns: df["Visitato"] = "No"
+    df["CAP"] = df["CAP"].astype(str).str.replace('.0', '', regex=False).str.strip()
+    df["Comune"] = df["Comune"].astype(str).str.upper().str.strip()
+    df["Indirizzo"] = df["Indirizzo"].astype(str).str.strip()
 
     st.success(f"✅ Database pronto: {len(df)} clienti")
 
@@ -58,8 +80,8 @@ if raw_df is not None:
     with c2:
         sel_caps = st.multiselect("📮 CAP:", sorted(df['CAP'].unique()))
 
-    # Logica filtro
-    mask = ~df['Visitato'].astype(str).str.upper().str.strip().isin(['SÌ', 'SI'])
+    # Filtro Visite
+    mask = ~df['Visitato'].astype(str).str.upper().str.strip().isin(['SÌ', 'SI', 'S'])
     if sel_comuni: mask &= (df['Comune'].isin(sel_comuni))
     if sel_caps: mask &= (df['CAP'].isin(sel_caps))
     
@@ -67,43 +89,38 @@ if raw_df is not None:
 
     if st.button("🚀 GENERA GIRO", use_container_width=True):
         if da_visitare.empty:
-            st.warning("Nessun cliente trovato con questi filtri.")
+            st.warning("Nessun cliente trovato.")
         else:
             percorso = []
             lista_clienti = da_visitare.to_dict('records')
             
-            with st.status("Ricerca posizioni sulla mappa...", expanded=True) as status:
-                clienti_con_coords = []
+            with st.status("Ricerca indirizzi...", expanded=True) as status:
+                clienti_validi = []
                 for p in lista_clienti:
-                    st.write(f"Cerco: {p['Cliente']} ({p['Indirizzo']})...")
-                    coords = get_coords(p['Indirizzo'], p['Comune'])
-                    if coords:
-                        p['coords'] = coords
-                        clienti_con_coords.append(p)
-                        st.write(f"✅ Trovato!")
-                    else:
-                        st.write(f"❌ Non trovato. Controlla l'indirizzo!")
-                    time.sleep(1) # Rispetta i limiti del servizio gratuito
+                    st.write(f"Verifica: {p['Cliente']}...")
+                    c = get_coords(p['Indirizzo'], p['Comune'])
+                    if c:
+                        p['coords'] = c
+                        clienti_validi.append(p)
+                    time.sleep(1) # Rispetto del server Nominatim
                 
-                if not clienti_con_coords:
-                    status.update(label="Errore: Nessun indirizzo trovato!", state="error")
+                if not clienti_validi:
+                    status.update(label="Nessun indirizzo trovato sulla mappa!", state="error")
                 else:
-                    status.update(label="Ottimizzazione percorso...", state="running")
-                    # Algoritmo calcolo
+                    # Algoritmo TSP Semplice
                     pos_attuale = SEDE_COORDS
-                    while len(percorso) < 10 and clienti_con_coords:
-                        prossimo = min(clienti_con_coords, key=lambda x: geodesic(pos_attuale, x['coords']).km)
+                    while len(percorso) < 10 and clienti_validi:
+                        prossimo = min(clienti_validi, key=lambda x: geodesic(pos_attuale, x['coords']).km)
                         percorso.append(prossimo)
                         pos_attuale = prossimo['coords']
-                        clienti_con_coords.remove(prossimo)
+                        clienti_validi.remove(prossimo)
                     
                     st.session_state.giro = percorso
                     status.update(label="Giro generato!", state="complete")
 
-    # --- VISUALIZZAZIONE ---
+    # --- OUTPUT ---
     if 'giro' in st.session_state and st.session_state.giro:
         giro = st.session_state.giro
-        st.subheader(f"Giro Ottimizzato: {len(giro)} tappe")
         
         m = folium.Map(location=SEDE_COORDS, zoom_start=11)
         for i, p in enumerate(giro):
@@ -112,10 +129,9 @@ if raw_df is not None:
 
         for i, p in enumerate(giro):
             with st.expander(f"🚩 {i+1}: {p['Cliente']}", expanded=True):
-                col_a, col_b = st.columns([2,1])
-                col_a.write(f"{p['Indirizzo']} - {p['Comune']}")
+                st.write(f"🏠 {p['Indirizzo']} - {p['Comune']}")
                 q = f"{p['Indirizzo']}, {p['Comune']}, Italy".replace(' ', '+')
-                col_b.link_button("🧭 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={q}&travelmode=driving")
+                st.link_button("🧭 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={q}&travelmode=driving", use_container_width=True)
 
 
 
