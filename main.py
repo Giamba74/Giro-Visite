@@ -20,7 +20,7 @@ def get_coords(address):
         return (location.latitude, location.longitude) if location else None
     except: return None
 
-uploaded_file = st.file_uploader("Carica Portafoglio Clienti", type=["xlsx"])
+uploaded_file = st.file_uploader("Carica Portafoglio Clienti", type=["xlsx", "xls", "csv"])
 
 if uploaded_file:
     df_full = pd.read_excel(uploaded_file)
@@ -87,3 +87,4 @@ if uploaded_file:
                     col_info.write(f"{t['A']}")
                     url = f"https://www.google.com/maps/dir/?api=1&destination={t['c'][0]},{t['c'][1]}"
                     col_nav.link_button("🧭 NAVIGA", url)
+
