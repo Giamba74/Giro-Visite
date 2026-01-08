@@ -6,29 +6,85 @@ import folium
 from streamlit_folium import st_folium
 import time
 
-# --- CONFIGURAZIONE CASA / PARTENZA ---
-SEDE_NOME = "CASA (Strada in Chianti)"
-SEDE_COORDS = (43.661888, 11.305728) 
-URL_SHEET = "https://docs.google.com/spreadsheets/d/1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0/edit?usp=sharing"
+# --- TEMA COLORI BRIGHTSTAR ---
+# Blu: #002D72 | Oro: #FFD700 | Bianco: #FFFFFF
+st.set_page_config(page_title="Brightstar Giro Visite", page_icon="⭐", layout="wide")
 
-st.set_page_config(page_title="Giro Visite Pro", page_icon="🚚", layout="wide")
+st.markdown("""
+    <style>
+    /* Sfondo Generale */
+    .stApp {
+        background-color: #001a41;
+    }
+    
+    /* Intestazione */
+    h1 {
+        color: #FFD700 !important;
+        text-align: center;
+        font-family: 'Arial Black', sans-serif;
+        text-shadow: 2px 2px 4px #000000;
+        border-bottom: 2px solid #FFD700;
+        padding-bottom: 10px;
+    }
+    
+    /* Pulsanti */
+    .stButton>button {
+        width: 100%;
+        border-radius: 50px;
+        height: 3.5em;
+        background: linear-gradient(145deg, #FFD700, #C5A000);
+        color: #002D72 !important;
+        font-weight: bold;
+        font-size: 18px;
+        border: 2px solid #FFFFFF;
+        box-shadow: 0px 4px 15px rgba(255, 215, 0, 0.3);
+        transition: 0.3s;
+    }
+    .stButton>button:hover {
+        transform: scale(1.02);
+        box-shadow: 0px 6px 20px rgba(255, 215, 0, 0.5);
+        color: #000000 !important;
+    }
+    
+    /* Card delle Tappe */
+    .tappa-card {
+        padding: 20px;
+        border-radius: 15px;
+        background-color: #002D72;
+        border: 1px solid #FFD700;
+        margin-bottom: 15px;
+        box-shadow: 5px 5px 15px rgba(0,0,0,0.3);
+    }
+    .tappa-header {
+        color: #FFD700;
+        font-weight: bold;
+        font-size: 1.2em;
+        margin-bottom: 5px;
+    }
+    .tappa-info {
+        color: #FFFFFF;
+        font-size: 0.9em;
+    }
+    
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        background-color: #00122e;
+        border-right: 2px solid #FFD700;
+    }
+    label { color: #FFD700 !important; font-weight: bold; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- CONFIGURAZIONE DATI ---
+SEDE_NOME = "⭐ SEDE BRIGHTSTAR"
+SEDE_COORDS = (43.661888, 11.305728) 
+URL_SHEET = "INCOLLA_QUI_IL_TUO_LINK_DI_GOOGLE_SHEETS"
 
 @st.cache_data(ttl=3600)
 def get_coords_smart(indirizzo, comune, cap):
-    geolocator = Nominatim(user_agent="pixel9_pro_final_v9")
-    # Pulizia dati
-    ind = str(indirizzo).strip()
-    com = str(comune).strip()
-    cp = str(cap).replace(".0", "").strip()
-    
-    # Query super precisa: Via, CAP, Comune
-    queries = [
-        f"{ind}, {cp}, {com}, Italy",
-        f"{ind}, {com}, Italy",
-        f"{com}, Italy"
-    ]
-    
-    for q in queries:
+    geolocator = Nominatim(user_agent="brightstar_nav_v11")
+    ind, com, cp = str(indirizzo).strip(), str(comune).strip(), str(cap).replace(".0", "").strip()
+    for q in [f"{ind}, {cp}, {com}, Italy", f"{ind}, {com}, Italy"]:
         try:
             loc = geolocator.geocode(q, timeout=7)
             if loc: return (loc.latitude, loc.longitude)
@@ -37,109 +93,84 @@ def get_coords_smart(indirizzo, comune, cap):
 
 def load_data(url):
     try:
-        if "/edit" in url:
-            url = url.split("/edit")[0] + "/export?format=csv"
+        if "/edit" in url: url = url.split("/edit")[0] + "/export?format=csv"
         df = pd.read_csv(url)
-        # Pulizia nomi colonne
         df.columns = [str(c).strip().upper() for c in df.columns]
-        mappa = {}
-        for c in df.columns:
-            if "CLIENTE" in c: mappa[c] = "Cliente"
-            elif "INDIRIZZO" in c: mappa[c] = "Indirizzo"
-            elif "COMUNE" in c: mappa[c] = "Comune"
-            elif "CAP" in c: mappa[c] = "CAP"
-            elif "VISITATO" in c: mappa[c] = "Visitato"
+        mappa = {c: c.capitalize() for c in df.columns if c.lower() in ['cliente', 'indirizzo', 'cap', 'comune', 'visitato']}
         return df.rename(columns=mappa)
     except: return None
 
-st.title("🚚 Giro Visite Ottimizzato")
+# --- UI ---
+st.title("⭐ BRIGHTSTAR GIRO VISITE")
 
 df = load_data(URL_SHEET)
 
 if df is not None:
-    # Pulizia dati colonne
-    for col in ['Cliente', 'Indirizzo', 'Comune', 'CAP']:
-        if col in df.columns: df[col] = df[col].fillna("").astype(str)
-    if 'Visitato' not in df.columns: df['Visitato'] = 'No'
-
-    # --- FILTRI ---
-    st.subheader("Seleziona Zona")
-    c1, c2 = st.columns(2)
-    with c1:
-        comuni = sorted(df['Comune'].unique().tolist())
-        sel_comune = st.selectbox("📍 Comune:", ["Tutti"] + comuni)
-    with c2:
-        caps = sorted(df['CAP'].unique().tolist())
+    with st.sidebar:
+        st.image("https://www.brightstarlottery.co.uk/wp-content/uploads/2021/05/brightstar-logo-white.png", width=200) # Logo placeholder
+        st.markdown("### 🔍 FILTRI RICERCA")
+        comuni = sorted(df['Comune'].fillna("").unique().tolist())
+        sel_comune = st.selectbox("📍 COMUNE:", ["Tutti"] + comuni)
+        
+        caps = sorted(df['CAP'].fillna("").astype(str).unique().tolist())
         sel_cap = st.selectbox("📮 CAP:", ["Tutti"] + caps)
-
-    # Applichiamo filtri
+        
     mask = ~df['Visitato'].astype(str).str.upper().str.strip().isin(['SÌ', 'SI', 'S'])
     if sel_comune != "Tutti": mask &= (df['Comune'] == sel_comune)
     if sel_cap != "Tutti": mask &= (df['CAP'] == sel_cap)
-    
     da_visitare = df[mask].copy()
 
-    if st.button("🚀 GENERA GIRO 10 TAPPE (DA CASA)", use_container_width=True):
+    if st.button("🚀 GENERA IL GIRO FORTUNATO"):
         clienti_localizzati = []
-        with st.status("Localizzazione e Ottimizzazione...", expanded=True) as status:
-            # Prendiamo un campione più ampio per estrarre i 10 migliori
-            campione = da_visitare.head(20).to_dict('records')
-            
+        with st.status("🌟 Elaborazione percorso ottimale...", expanded=True) as status:
+            campione = da_visitare.head(15).to_dict('records')
             for row in campione:
-                st.write(f"🌍 Analizzo: {row['Cliente']} ({row['CAP']})...")
                 coords = get_coords_smart(row['Indirizzo'], row['Comune'], row['CAP'])
                 if coords:
                     row['coords'] = coords
                     clienti_localizzati.append(row)
-                    st.write("✅ OK")
-                time.sleep(1)
+                time.sleep(0.8)
 
             if clienti_localizzati:
-                # --- ALGORITMO GIRO OTTIMIZZATO ---
-                giro_ottimizzato = []
-                posizione_attuale = SEDE_COORDS
-                
-                while len(giro_ottimizzato) < 10 and clienti_localizzati:
-                    # Trova il più vicino alla posizione attuale
-                    prossimo = min(clienti_localizzati, key=lambda x: geodesic(posizione_attuale, x['coords']).km)
-                    giro_ottimizzato.append(prossimo)
-                    posizione_attuale = prossimo['coords']
+                giro = []
+                pos = SEDE_COORDS
+                while len(giro) < 10 and clienti_localizzati:
+                    prossimo = min(clienti_localizzati, key=lambda x: geodesic(pos, x['coords']).km)
+                    giro.append(prossimo)
+                    pos = prossimo['coords']
                     clienti_localizzati.remove(prossimo)
-                
-                st.session_state.giro = giro_ottimizzato
-                status.update(label="Giro Ottimizzato Generato!", state="complete")
+                st.session_state.giro = giro
+                status.update(label="✨ Percorso pronto!", state="complete")
             else:
-                status.update(label="Nessun indirizzo trovato!", state="error")
+                status.update(label="❌ Nessun cliente trovato.", state="error")
 
-    # --- VISUALIZZAZIONE RISULTATI ---
     if 'giro' in st.session_state:
         giro = st.session_state.giro
         
-        # Mappa con linea del percorso
-        m = folium.Map(location=SEDE_COORDS, zoom_start=11)
+        # Mappa Custom (Colori Brightstar)
+        m = folium.Map(location=SEDE_COORDS, zoom_start=11, tiles="CartoDB voyager")
+        punti = [SEDE_COORDS] + [p['coords'] for p in giro] + [SEDE_COORDS]
+        folium.PolyLine(punti, color="#002D72", weight=5, opacity=0.8).add_to(m)
+        folium.Marker(SEDE_COORDS, popup="START", icon=folium.Icon(color='blue', icon='star')).add_to(m)
         
-        # Aggiungiamo CASA
-        folium.Marker(SEDE_COORDS, popup=SEDE_NOME, icon=folium.Icon(color='green', icon='home')).add_to(m)
-        
-        # Punti del percorso per la linea blu
-        punti_percorso = [SEDE_COORDS]
-        for p in giro:
-            punti_percorso.append(p['coords'])
-            folium.Marker(p['coords'], popup=p['Cliente'], icon=folium.Icon(color='blue')).add_to(m)
-        punti_percorso.append(SEDE_COORDS) # Ritorno a casa
-        
-        folium.PolyLine(punti_percorso, color="blue", weight=2.5, opacity=1).add_to(m)
-        
-        st_folium(m, width="100%", height=400)
-
-        st.subheader("Elenco Tappe in ordine:")
         for i, p in enumerate(giro):
-            with st.expander(f"🚩 TAPPA {i+1}: {p['Cliente']}"):
-                st.write(f"📮 CAP: {p['CAP']} | 🏠 {p['Indirizzo']} ({p['Comune']})")
-                q = f"{p['Indirizzo']} {p['CAP']} {p['Comune']} Italy".replace(' ', '+')
-                st.link_button(f"🧭 NAVIGA VERSO TAPPA {i+1}", f"https://www.google.com/maps/dir/?api=1&destination={q}&travelmode=driving", use_container_width=True)
+            folium.Marker(p['coords'], popup=p['Cliente'], icon=folium.Icon(color='orange', icon='location-arrow')).add_to(m)
         
-        st.success(f"🏁 Dopo l'ultima tappa, rientro a: {SEDE_NOME}")
+        st_folium(m, width="100%", height=450)
 
+        st.markdown("### 📋 ORDINE VISITE")
+        for i, p in enumerate(giro):
+            st.markdown(f"""
+            <div class="tappa-card">
+                <div class="tappa-header">🌟 Tappa {i+1}: {p['Cliente']}</div>
+                <div class="tappa-info">🏠 {p['Indirizzo']}, {p['CAP']} {p['Comune']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            query = f"{p['Indirizzo']} {p['Comune']} Italy".replace(' ', '+')
+            st.link_button(f"🧭 NAVIGA VERSO {p['Cliente']}", 
+                          f"https://www.google.com/maps/dir/?api=1&destination={query}&travelmode=driving")
+        
+        st.success("🏁 Itinerario concluso. Buon lavoro!")
 else:
-    st.error("Impossibile caricare il database. Controlla il link Google Sheets.")
+    st.error("Errore nel collegamento dati. Controlla il link Google Sheets.")
