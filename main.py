@@ -4,26 +4,23 @@ from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 import folium
 from streamlit_folium import st_folium
+import time
 
-# --- CONFIGURAZIONE FISSA ---
+# --- CONFIGURAZIONE ---
 SEDE_INDIRIZZO = "Via G. Ferrero 122, Strada in Chianti, FI, Italy"
 SEDE_COORDS = (43.6558, 11.3103)
+URL_SHEET = "INCOLLA_QUI_IL_TUO_LINK_DI_GOOGLE_SHEETS"
 
-# SOSTITUISCI IL LINK QUI SOTTO
-URL_SHEET = "https://docs.google.com/spreadsheets/d/1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0/edit?usp=sharing"
-
-st.set_page_config(
-    page_title="Giro Visite Pro", 
-    page_icon="🚚", 
-    layout="wide", 
-    initial_sidebar_state="collapsed"
-)
+st.set_page_config(page_title="Giro Visite Pro", page_icon="🚚", layout="wide")
 
 @st.cache_data(ttl=600)
-def get_coords(address):
+def get_coords(address, comune):
     try:
-        geolocator = Nominatim(user_agent="pixel9_pro_chianti_final_v3")
-        loc = geolocator.geocode(address, timeout=10)
+        # Uniamo indirizzo e comune per maggiore precisione
+        full_address = f"{address}, {comune}, Italy"
+        geolocator = Nominatim(user_agent="pixel9_pro_final_tester")
+        # Aumentato il timeout a 10 secondi per evitare blocchi
+        loc = geolocator.geocode(full_address, timeout=10)
         return (loc.latitude, loc.longitude) if loc else None
     except:
         return None
@@ -44,66 +41,70 @@ if raw_df is not None:
     df = raw_df.copy()
     df.columns = df.columns.astype(str).str.strip()
     
-    # Uniformiamo i nomi delle colonne
-    rename_dict = {}
-    for col in df.columns:
-        c_low = col.lower()
-        if c_low == 'cliente': rename_dict[col] = 'Cliente'
-        elif c_low == 'indirizzo': rename_dict[col] = 'Indirizzo'
-        elif c_low == 'cap': rename_dict[col] = 'CAP'
-        elif c_low == 'comune': rename_dict[col] = 'Comune'
-        elif c_low == 'visitato': rename_dict[col] = 'Visitato'
+    # Uniformiamo nomi colonne
+    rename_dict = {col: col.capitalize() for col in df.columns if col.lower() in ['cliente', 'indirizzo', 'cap', 'comune', 'visitato']}
     df = df.rename(columns=rename_dict)
 
-    # Pulizia dati
-    if 'CAP' in df.columns:
-        df['CAP'] = df['CAP'].astype(str).str.replace('.0', '', regex=False).str.strip()
-    if 'Comune' in df.columns:
-        df['Comune'] = df['Comune'].astype(str).str.upper().str.strip()
-    if 'Visitato' not in df.columns:
-        df['Visitato'] = 'No'
+    if 'Visitato' not in df.columns: df['Visitato'] = 'No'
+    df['Comune'] = df['Comune'].astype(str).str.upper().str.strip()
+    df['CAP'] = df['CAP'].astype(str).str.replace('.0', '', regex=False).str.strip()
 
-    st.success(f"✅ Sincronizzato: {len(df)} clienti")
+    st.success(f"✅ Database pronto: {len(df)} clienti")
 
-    # Filtri
-    st.subheader("Filtra Zona")
+    # --- FILTRI ---
     c1, c2 = st.columns(2)
     with c1:
-        comuni_lista = sorted(df['Comune'].unique()) if 'Comune' in df.columns else []
-        sel_comuni = st.multiselect("📍 Comuni:", comuni_lista)
+        sel_comuni = st.multiselect("📍 Comuni:", sorted(df['Comune'].unique()))
     with c2:
-        caps_lista = sorted(df['CAP'].unique()) if 'CAP' in df.columns else []
-        sel_caps = st.multiselect("📮 CAP:", caps_lista)
+        sel_caps = st.multiselect("📮 CAP:", sorted(df['CAP'].unique()))
 
-    # Logica Filtro
-    mask_visitato = df['Visitato'].astype(str).str.upper().str.strip().isin(['SÌ', 'SI'])
-    mask = ~mask_visitato
+    # Logica filtro
+    mask = ~df['Visitato'].astype(str).str.upper().str.strip().isin(['SÌ', 'SI'])
     if sel_comuni: mask &= (df['Comune'].isin(sel_comuni))
     if sel_caps: mask &= (df['CAP'].isin(sel_caps))
-
+    
     da_visitare = df[mask].copy()
 
-    if st.button("🚀 GENERA GIRO (MAX 10 TAPPE)", use_container_width=True):
+    if st.button("🚀 GENERA GIRO", use_container_width=True):
         if da_visitare.empty:
-            st.warning("Nessun cliente trovato.")
+            st.warning("Nessun cliente trovato con questi filtri.")
         else:
-            with st.spinner('Calcolo...'):
-                da_visitare['coords'] = da_visitare['Indirizzo'].apply(get_coords)
-                da_visitare = da_visitare.dropna(subset=['coords'])
+            percorso = []
+            lista_clienti = da_visitare.to_dict('records')
+            
+            with st.status("Ricerca posizioni sulla mappa...", expanded=True) as status:
+                clienti_con_coords = []
+                for p in lista_clienti:
+                    st.write(f"Cerco: {p['Cliente']} ({p['Indirizzo']})...")
+                    coords = get_coords(p['Indirizzo'], p['Comune'])
+                    if coords:
+                        p['coords'] = coords
+                        clienti_con_coords.append(p)
+                        st.write(f"✅ Trovato!")
+                    else:
+                        st.write(f"❌ Non trovato. Controlla l'indirizzo!")
+                    time.sleep(1) # Rispetta i limiti del servizio gratuito
                 
-                clienti_list = da_visitare.to_dict('records')
-                percorso = []
-                pos_attuale = SEDE_COORDS
-                
-                while len(percorso) < 10 and clienti_list:
-                    prossimo = min(clienti_list, key=lambda x: geodesic(pos_attuale, x['coords']).km)
-                    percorso.append(prossimo)
-                    pos_attuale = prossimo['coords']
-                    clienti_list.remove(prossimo)
-                st.session_state.giro = percorso
+                if not clienti_con_coords:
+                    status.update(label="Errore: Nessun indirizzo trovato!", state="error")
+                else:
+                    status.update(label="Ottimizzazione percorso...", state="running")
+                    # Algoritmo calcolo
+                    pos_attuale = SEDE_COORDS
+                    while len(percorso) < 10 and clienti_con_coords:
+                        prossimo = min(clienti_con_coords, key=lambda x: geodesic(pos_attuale, x['coords']).km)
+                        percorso.append(prossimo)
+                        pos_attuale = prossimo['coords']
+                        clienti_con_coords.remove(prossimo)
+                    
+                    st.session_state.giro = percorso
+                    status.update(label="Giro generato!", state="complete")
 
+    # --- VISUALIZZAZIONE ---
     if 'giro' in st.session_state and st.session_state.giro:
         giro = st.session_state.giro
+        st.subheader(f"Giro Ottimizzato: {len(giro)} tappe")
+        
         m = folium.Map(location=SEDE_COORDS, zoom_start=11)
         for i, p in enumerate(giro):
             folium.Marker(p['coords'], popup=p['Cliente']).add_to(m)
@@ -111,11 +112,10 @@ if raw_df is not None:
 
         for i, p in enumerate(giro):
             with st.expander(f"🚩 {i+1}: {p['Cliente']}", expanded=True):
-                st.write(f"🏠 {p['Indirizzo']} - {p['Comune']}")
-                query = f"{p['Indirizzo']}, {p['Comune']}, Italy".replace(' ', '+')
-                url = f"https://www.google.com/maps/dir/?api=1&destination={query}&travelmode=driving"
-                st.link_button("🧭 NAVIGA", url, use_container_width=True)
-else:
-    st.info("Incolla il link del foglio Google nel codice.")
+                col_a, col_b = st.columns([2,1])
+                col_a.write(f"{p['Indirizzo']} - {p['Comune']}")
+                q = f"{p['Indirizzo']}, {p['Comune']}, Italy".replace(' ', '+')
+                col_b.link_button("🧭 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={q}&travelmode=driving")
+
 
 
