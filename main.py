@@ -10,7 +10,7 @@ SEDE_INDIRIZZO = "Via G. Ferrero 122, Strada in Chianti, FI, Italy"
 SEDE_COORDS = (43.6558, 11.3103)
 
 # SOSTITUISCI IL LINK QUI SOTTO
-URL_SHEET = "INCOLLA_QUI_IL_TUO_LINK_DI_GOOGLE_SHEETS"
+URL_SHEET = "https://docs.google.com/spreadsheets/d/1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0/edit?usp=sharing"
 
 st.set_page_config(
     page_title="Giro Visite Pro", 
@@ -117,4 +117,5 @@ if raw_df is not None:
                 st.link_button("🧭 NAVIGA", url, use_container_width=True)
 else:
     st.info("Incolla il link del foglio Google nel codice.")
+
 
