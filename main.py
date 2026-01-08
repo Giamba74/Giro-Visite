@@ -4,108 +4,89 @@ from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 import folium
 from streamlit_folium import st_folium
-from shworksheet import connect 
 
 # --- CONFIGURAZIONE ---
 SEDE_INDIRIZZO = "Via G. Ferrero 122, Strada in Chianti, FI, Italy"
-SEDE_NOME = "UFFICIO"
-# ASSICURATI DI INCOLLARE IL TUO LINK QUI SOTTO
-URL_SHEET = "https://docs.google.com/spreadsheets/d/1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0/edit?usp=sharing"
+URL_SHEET = "INCOLLA_QUI_IL_TUO_LINK_DI_GOOGLE_SHEETS"
 
-st.set_page_config(page_title="Giro Visite Pro", layout="wide")
+st.set_page_config(page_title="Giro Visite Pro", page_icon="🚚", layout="wide")
 
-@st.cache_data(ttl=300) # Cache di 5 minuti per non rallentare il telefono
+@st.cache_data(ttl=300)
 def get_coords(address):
     try:
-        geolocator = Nominatim(user_agent="pixel9_pro_chianti_final")
+        geolocator = Nominatim(user_agent="pixel9_pro_nav_system")
         loc = geolocator.geocode(address, timeout=10)
         return (loc.latitude, loc.longitude) if loc else None
     except: return None
 
-st.title("🚚 Pianificatore Visite Ottimizzato")
+def load_data(url):
+    # Trasforma il link di condivisione in link di download diretto CSV
+    path = url.split("/edit")[0] + "/export?format=csv"
+    return pd.read_csv(path)
 
-# Connessione al Cloud
+st.title("🚚 Pianificatore Visite")
+
+# Caricamento dati
 try:
-    conn = connect(URL_SHEET)
-    df = conn.read()
-    # Pulizia automatica dei dati
+    df = load_data(URL_SHEET)
+    # Pulizia nomi colonne e dati
+    df.columns = df.columns.str.strip()
     df['CAP'] = df['CAP'].astype(str).str.replace('.0', '', regex=False).str.strip()
     df['Comune'] = df['Comune'].astype(str).str.upper().str.strip()
-    df['Indirizzo'] = df['Indirizzo'].astype(str).str.strip()
-    st.success(f"✅ Database pronto: {len(df)} clienti in memoria")
+    st.success(f"✅ Database Sincronizzato ({len(df)} clienti)")
 except Exception as e:
-    st.error(f"❌ Errore: Controlla il link del foglio o le intestazioni delle colonne. {e}")
+    st.error(f"Configura il link Google Sheets nel codice. Errore: {e}")
     st.stop()
 
-# --- FILTRI ---
-st.subheader("Seleziona la zona di oggi")
+# --- INTERFACCIA FILTRI ---
 col1, col2 = st.columns(2)
 with col1:
-    lista_comuni = sorted(df['Comune'].unique())
-    comuni_sel = st.multiselect("📍 Comune:", lista_comuni)
+    comuni = sorted(df['Comune'].unique())
+    sel_comuni = st.multiselect("📍 Comuni:", comuni)
 with col2:
-    lista_cap = sorted(df['CAP'].unique())
-    cap_sel = st.multiselect("📮 CAP:", lista_cap)
+    caps = sorted(df['CAP'].unique())
+    sel_caps = st.multiselect("📮 CAP:", caps)
 
-# Logica di filtraggio
-mask = (df['Visitato'] != 'Sì')
-if comuni_sel:
-    mask &= (df['Comune'].isin(comuni_sel))
-if cap_sel:
-    mask &= (df['CAP'].isin(cap_sel))
+mask = (df['Visitato'].get('Visitato', 'No') != 'Sì') # Gestisce se la colonna manca
+if sel_comuni: mask &= (df['Comune'].isin(sel_comuni))
+if sel_caps: mask &= (df['CAP'].isin(sel_caps))
 
 da_visitare = df[mask].copy()
 
-if st.button("🚀 GENERA GIRO (MAX 10)"):
+if st.button("🚀 GENERA GIRO (10 Tappe)", use_container_width=True):
     if da_visitare.empty:
-        st.warning("⚠️ Nessun cliente disponibile per questi filtri.")
+        st.warning("Nessun cliente trovato.")
     else:
-        with st.status("Calcolo percorso ottimale...", expanded=True) as status:
+        with st.spinner('Calcolo percorso...'):
             sede_coords = (43.6558, 11.3103)
-            
-            # Geocodifica sulla colonna "Indirizzo" che hai creato
             da_visitare['coords'] = da_visitare['Indirizzo'].apply(get_coords)
             da_visitare = da_visitare.dropna(subset=['coords'])
             
-            # Algoritmo di prossimità
-            clienti_lista = da_visitare.to_dict('records')
+            clienti = da_visitare.to_dict('records')
             percorso = []
-            pos_attuale = sede_coords
-            
-            while len(percorso) < 10 and clienti_lista:
-                prossimo = min(clienti_lista, key=lambda x: geodesic(pos_attuale, x['coords']).km)
-                percorso.append(prossimo)
-                pos_attuale = prossimo['coords']
-                clienti_lista.remove(prossimo)
-            
+            pos = sede_coords
+            while len(percorso) < 10 and clienti:
+                p = min(clienti, key=lambda x: geodesic(pos, x['coords']).km)
+                percorso.append(p)
+                pos = p['coords']
+                clienti.remove(p)
             st.session_state.giro = percorso
-            status.update(label="Giro calcolato con successo!", state="complete")
 
-# --- LISTA E NAVIGAZIONE ---
+# --- MAPPA E NAVIGAZIONE ---
 if 'giro' in st.session_state:
     percorso = st.session_state.giro
     
-    # Mappa piccola per risparmiare spazio su mobile
+    # Mappa
     m = folium.Map(location=[43.6558, 11.3103], zoom_start=11)
     for i, p in enumerate(percorso):
         folium.Marker(p['coords'], popup=p['Cliente']).add_to(m)
     st_folium(m, width="100%", height=300)
 
+    st.info("⚠️ Segna le visite fatte direttamente sul tuo Google Sheets per aggiornare l'elenco.")
+
     for i, p in enumerate(percorso):
         with st.expander(f"🚩 {i+1}: {p['Cliente']}", expanded=True):
-            c1, c2 = st.columns([2, 1])
-            c1.write(f"{p['Indirizzo']}\n({p['Comune']})")
-            
-            # Bottone Fatto
-            if c2.button("✅ FATTO", key=f"ok_{i}"):
-                conn.update_cell(p['Cliente'], 'Visitato', 'Sì', col_chiave='Cliente')
-                st.toast(f"Aggiornato!")
-                st.session_state.giro.pop(i)
-                st.rerun()
-            
-            # Bottone Navigatore (ottimizzato per Google Maps App)
-            # Inseriamo anche il Comune per essere più precisi
-            addr_query = f"{p['Indirizzo']}, {p['Comune']}, Italy"
-            maps_url = f"https://www.google.com/maps/dir/?api=1&destination={addr_query.replace(' ', '+')}&travelmode=driving"
-            st.link_button("🧭 NAVIGA", maps_url, use_container_width=True)
-
+            st.write(f"🏠 {p['Indirizzo']} - {p['Comune']}")
+            addr_query = f"{p['Indirizzo']}, {p['Comune']}, Italy".replace(' ', '+')
+            url = f"https://www.google.com/maps/dir/?api=1&destination={addr_query}&travelmode=driving"
+            st.link_button("🧭 AVVIA NAVIGATORE", url, use_container_width=True)
