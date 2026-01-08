@@ -10,7 +10,7 @@ from shworksheet import connect
 SEDE_INDIRIZZO = "Via G. Ferrero 122, Strada in Chianti, FI, Italy"
 SEDE_NOME = "UFFICIO"
 # ASSICURATI DI INCOLLARE IL TUO LINK QUI SOTTO
-URL_SHEET = "INCOLLA_QUI_IL_TUO_LINK_DI_GOOGLE_SHEETS"
+URL_SHEET = "https://docs.google.com/spreadsheets/d/1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0/edit?usp=sharing"
 
 st.set_page_config(page_title="Giro Visite Pro", layout="wide")
 
@@ -108,3 +108,4 @@ if 'giro' in st.session_state:
             addr_query = f"{p['Indirizzo']}, {p['Comune']}, Italy"
             maps_url = f"https://www.google.com/maps/dir/?api=1&destination={addr_query.replace(' ', '+')}&travelmode=driving"
             st.link_button("🧭 NAVIGA", maps_url, use_container_width=True)
+
