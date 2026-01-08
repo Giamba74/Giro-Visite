@@ -6,120 +6,140 @@ import folium
 from streamlit_folium import st_folium
 import time
 
-# --- CONFIGURAZIONE ---
-SEDE_COORDS = (43.661888, 11.305728) # Strada in Chianti
+# --- CONFIGURAZIONE CASA / PARTENZA ---
+SEDE_NOME = "CASA (Strada in Chianti)"
+SEDE_COORDS = (43.661888, 11.305728) 
 URL_SHEET = "https://docs.google.com/spreadsheets/d/1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0/edit?usp=sharing"
 
 st.set_page_config(page_title="Giro Visite Pro", page_icon="🚚", layout="wide")
 
 @st.cache_data(ttl=3600)
-def get_coords_v3(via_civico, comune):
-    geolocator = Nominatim(user_agent="pixel9_pro_final_v6")
-    # Puliamo l'indirizzo da eventuali virgole residue o spazi doppi
-    indirizzo_pulito = str(via_civico).replace(",", " ").strip()
-    comune_pulito = str(comune).strip()
+def get_coords_smart(indirizzo, comune, cap):
+    geolocator = Nominatim(user_agent="pixel9_pro_final_v9")
+    # Pulizia dati
+    ind = str(indirizzo).strip()
+    com = str(comune).strip()
+    cp = str(cap).replace(".0", "").strip()
     
-    # Tentativo 1: Indirizzo completo (Via Civico, Comune, Italia)
-    query1 = f"{indirizzo_pulito}, {comune_pulito}, Italy"
-    try:
-        loc = geolocator.geocode(query1, timeout=10)
-        if loc: return (loc.latitude, loc.longitude)
-        
-        # Tentativo 2: Solo Via e Comune (senza civico, se il civico è il problema)
-        via_solo = " ".join(indirizzo_pulito.split()[:-1])
-        query2 = f"{via_solo}, {comune_pulito}, Italy"
-        loc = geolocator.geocode(query2, timeout=10)
-        if loc: return (loc.latitude, loc.longitude)
-
-        # Tentativo 3: Solo Comune (Punto di appoggio)
-        query3 = f"{comune_pulito}, Italy"
-        loc = geolocator.geocode(query3, timeout=10)
-        if loc: return (loc.latitude, loc.longitude)
-    except:
-        return None
+    # Query super precisa: Via, CAP, Comune
+    queries = [
+        f"{ind}, {cp}, {com}, Italy",
+        f"{ind}, {com}, Italy",
+        f"{com}, Italy"
+    ]
+    
+    for q in queries:
+        try:
+            loc = geolocator.geocode(q, timeout=7)
+            if loc: return (loc.latitude, loc.longitude)
+        except: continue
     return None
 
 def load_data(url):
     try:
-        path = url.split("/edit")[0] + "/export?format=csv"
-        return pd.read_csv(path)
-    except Exception as e:
-        st.error(f"Errore caricamento Google Sheets: {e}")
-        return None
+        if "/edit" in url:
+            url = url.split("/edit")[0] + "/export?format=csv"
+        df = pd.read_csv(url)
+        # Pulizia nomi colonne
+        df.columns = [str(c).strip().upper() for c in df.columns]
+        mappa = {}
+        for c in df.columns:
+            if "CLIENTE" in c: mappa[c] = "Cliente"
+            elif "INDIRIZZO" in c: mappa[c] = "Indirizzo"
+            elif "COMUNE" in c: mappa[c] = "Comune"
+            elif "CAP" in c: mappa[c] = "CAP"
+            elif "VISITATO" in c: mappa[c] = "Visitato"
+        return df.rename(columns=mappa)
+    except: return None
 
-st.title("🚚 Pianificatore Visite")
+st.title("🚚 Giro Visite Ottimizzato")
 
-raw_df = load_data(URL_SHEET)
+df = load_data(URL_SHEET)
 
-if raw_df is not None:
-    df = raw_df.copy()
-    df.columns = [str(c).strip().upper() for c in df.columns]
-    
-    # Mappatura Colonne
-    mappa = {}
-    for col in df.columns:
-        if "CLIENTE" in col: mappa[col] = "Cliente"
-        elif "INDIRIZZO" in col: mappa[col] = "Indirizzo"
-        elif "CAP" in col: mappa[col] = "CAP"
-        elif "COMUNE" in col: mappa[col] = "Comune"
-        elif "VISITATO" in col: mappa[col] = "Visitato"
-    df = df.rename(columns=mappa)
+if df is not None:
+    # Pulizia dati colonne
+    for col in ['Cliente', 'Indirizzo', 'Comune', 'CAP']:
+        if col in df.columns: df[col] = df[col].fillna("").astype(str)
+    if 'Visitato' not in df.columns: df['Visitato'] = 'No'
 
-    # Pulizia Base
-    df["Comune"] = df["Comune"].fillna("").astype(str)
-    df["Indirizzo"] = df["Indirizzo"].fillna("").astype(str)
-    if "Visitato" not in df.columns: df["Visitato"] = "No"
+    # --- FILTRI ---
+    st.subheader("Seleziona Zona")
+    c1, c2 = st.columns(2)
+    with c1:
+        comuni = sorted(df['Comune'].unique().tolist())
+        sel_comune = st.selectbox("📍 Comune:", ["Tutti"] + comuni)
+    with c2:
+        caps = sorted(df['CAP'].unique().tolist())
+        sel_cap = st.selectbox("📮 CAP:", ["Tutti"] + caps)
 
-    st.success(f"✅ Database pronto ({len(df)} clienti)")
-
-    # Filtri
-    sel_comuni = st.multiselect("📍 Seleziona Comuni:", sorted(df['Comune'].unique().tolist()))
-
+    # Applichiamo filtri
     mask = ~df['Visitato'].astype(str).str.upper().str.strip().isin(['SÌ', 'SI', 'S'])
-    if sel_comuni: mask &= (df['Comune'].isin(sel_comuni))
+    if sel_comune != "Tutti": mask &= (df['Comune'] == sel_comune)
+    if sel_cap != "Tutti": mask &= (df['CAP'] == sel_cap)
     
     da_visitare = df[mask].copy()
 
-    if st.button("🚀 GENERA GIRO OTTIMIZZATO", use_container_width=True):
-        if da_visitare.empty:
-            st.warning("Nessun cliente da visitare trovato.")
-        else:
-            clienti_validi = []
-            with st.status("Ricerca posizioni...", expanded=True) as status:
-                for row in da_visitare.to_dict('records'):
-                    st.write(f"🌍 Cerco: {row['Cliente']}...")
-                    coords = get_coords_v3(row['Indirizzo'], row['Comune'])
-                    if coords:
-                        row['coords'] = coords
-                        clienti_validi.append(row)
-                    time.sleep(1.2) # Indispensabile per non essere bloccati dal server
+    if st.button("🚀 GENERA GIRO 10 TAPPE (DA CASA)", use_container_width=True):
+        clienti_localizzati = []
+        with st.status("Localizzazione e Ottimizzazione...", expanded=True) as status:
+            # Prendiamo un campione più ampio per estrarre i 10 migliori
+            campione = da_visitare.head(20).to_dict('records')
+            
+            for row in campione:
+                st.write(f"🌍 Analizzo: {row['Cliente']} ({row['CAP']})...")
+                coords = get_coords_smart(row['Indirizzo'], row['Comune'], row['CAP'])
+                if coords:
+                    row['coords'] = coords
+                    clienti_localizzati.append(row)
+                    st.write("✅ OK")
+                time.sleep(1)
 
-                if clienti_validi:
-                    # Algoritmo Prossimità
-                    percorso = []
-                    pos_attuale = SEDE_COORDS
-                    while len(percorso) < 10 and clienti_validi:
-                        prossimo = min(clienti_validi, key=lambda x: geodesic(pos_attuale, x['coords']).km)
-                        percorso.append(prossimo)
-                        pos_attuale = prossimo['coords']
-                        clienti_validi.remove(prossimo)
-                    
-                    st.session_state.giro = percorso
-                    status.update(label="Giro generato!", state="complete")
-                else:
-                    status.update(label="Errore: Nessun indirizzo trovato!", state="error")
+            if clienti_localizzati:
+                # --- ALGORITMO GIRO OTTIMIZZATO ---
+                giro_ottimizzato = []
+                posizione_attuale = SEDE_COORDS
+                
+                while len(giro_ottimizzato) < 10 and clienti_localizzati:
+                    # Trova il più vicino alla posizione attuale
+                    prossimo = min(clienti_localizzati, key=lambda x: geodesic(posizione_attuale, x['coords']).km)
+                    giro_ottimizzato.append(prossimo)
+                    posizione_attuale = prossimo['coords']
+                    clienti_localizzati.remove(prossimo)
+                
+                st.session_state.giro = giro_ottimizzato
+                status.update(label="Giro Ottimizzato Generato!", state="complete")
+            else:
+                status.update(label="Nessun indirizzo trovato!", state="error")
 
-    if 'giro' in st.session_state and st.session_state.giro:
+    # --- VISUALIZZAZIONE RISULTATI ---
+    if 'giro' in st.session_state:
         giro = st.session_state.giro
         
+        # Mappa con linea del percorso
         m = folium.Map(location=SEDE_COORDS, zoom_start=11)
-        for i, p in enumerate(giro):
-            folium.Marker(p['coords'], popup=p['Cliente']).add_to(m)
-        st_folium(m, width="100%", height=350)
+        
+        # Aggiungiamo CASA
+        folium.Marker(SEDE_COORDS, popup=SEDE_NOME, icon=folium.Icon(color='green', icon='home')).add_to(m)
+        
+        # Punti del percorso per la linea blu
+        punti_percorso = [SEDE_COORDS]
+        for p in giro:
+            punti_percorso.append(p['coords'])
+            folium.Marker(p['coords'], popup=p['Cliente'], icon=folium.Icon(color='blue')).add_to(m)
+        punti_percorso.append(SEDE_COORDS) # Ritorno a casa
+        
+        folium.PolyLine(punti_percorso, color="blue", weight=2.5, opacity=1).add_to(m)
+        
+        st_folium(m, width="100%", height=400)
 
+        st.subheader("Elenco Tappe in ordine:")
         for i, p in enumerate(giro):
-            with st.expander(f"🚩 TAPPA {i+1}: {p['Cliente']}", expanded=True):
-                st.write(f"🏠 {p['Indirizzo']} ({p['Comune']})")
-                # Link Navigazione
-                dest = f"{p['Indirizzo']} {p['Comune']} Italy".replace(' ', '+')
-                st.link_button("🧭 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={dest}&travelmode=driving", use_container_width=True)
+            with st.expander(f"🚩 TAPPA {i+1}: {p['Cliente']}"):
+                st.write(f"📮 CAP: {p['CAP']} | 🏠 {p['Indirizzo']} ({p['Comune']})")
+                q = f"{p['Indirizzo']} {p['CAP']} {p['Comune']} Italy".replace(' ', '+')
+                st.link_button(f"🧭 NAVIGA VERSO TAPPA {i+1}", f"https://www.google.com/maps/dir/?api=1&destination={q}&travelmode=driving", use_container_width=True)
+        
+        st.success(f"🏁 Dopo l'ultima tappa, rientro a: {SEDE_NOME}")
+
+else:
+    st.error("Impossibile caricare il database. Controlla il link Google Sheets.")
