@@ -59,42 +59,60 @@ ws = get_gsheet_ws(ID_DEL_FOGLIO)
 
 if ws:
     if 'df_db' not in st.session_state:
-        data = ws.get_all_records()
-        df = pd.DataFrame(data)
-        df.columns = [str(c).strip().upper() for c in df.columns]
-        st.session_state.df_db = df
+        try:
+            # Metodo robusto: get_all_values invece di get_all_records
+            all_values = ws.get_all_values()
+            if len(all_values) > 1:
+                headers = [str(h).strip().upper() for h in all_values[0]]
+                data = all_values[1:]
+                df = pd.DataFrame(data, columns=headers)
+                # Pulizia dati: rimuove righe vuote e normalizza visitato
+                df = df[df['CLIENTE'] != ""]
+                st.session_state.df_db = df
+            else:
+                st.error("Il foglio sembra vuoto o mancano le intestazioni.")
+                st.stop()
+        except Exception as e:
+            st.error(f"Errore caricamento dati: {e}")
+            st.stop()
     
     df = st.session_state.df_db
+    
+    # Filtro: escludi chi ha già "SI" in VISITATO
     df_liberi = df[~df['VISITATO'].astype(str).str.upper().str.contains('SI|SÌ', na=False)]
 
     with st.container():
         st.markdown("<div class='header-box'>", unsafe_allow_html=True)
         col1, col2 = st.columns(2)
         with col1:
-            comuni = st.multiselect("📍 Comuni:", sorted(df['COMUNE'].unique().tolist()) if 'COMUNE' in df.columns else [])
+            comuni_list = sorted(df['COMUNE'].unique().tolist()) if 'COMUNE' in df.columns else []
+            sel_comuni = st.multiselect("📍 Comuni:", comuni_list)
         with col2:
-            forzati = st.multiselect("📌 Clienti Obbligatori:", sorted(df['CLIENTE'].unique().tolist()) if 'CLIENTE' in df.columns else [])
+            clienti_list = sorted(df['CLIENTE'].unique().tolist()) if 'CLIENTE' in df.columns else []
+            forzati = st.multiselect("📌 Clienti Obbligatori:", clienti_list)
         
         if st.button("🚀 GENERA 10 VISITE OTTIMIZZATE"):
             with st.spinner("Calcolo percorso..."):
                 giro = df[df['CLIENTE'].isin(forzati)].to_dict('records')
                 mask = df['CLIENTE'].isin(df_liberi['CLIENTE']) & ~df['CLIENTE'].isin(forzati)
-                if comuni: mask &= df['COMUNE'].isin(comuni)
+                if sel_comuni: mask &= df['COMUNE'].isin(sel_comuni)
                 
                 extra = df[mask].head(10 - len(giro)).to_dict('records')
                 giro.extend(extra)
                 
-                geo = Nominatim(user_agent="brightstar_v5")
+                geo = Nominatim(user_agent="brightstar_v6")
                 for r in giro:
                     try:
-                        loc = geo.geocode(f"{r['INDIRIZZO']}, {r['COMUNE']}, Italy", timeout=3)
+                        # Assicurati che le colonne INDIRIZZO e COMUNE esistano
+                        addr = f"{r.get('INDIRIZZO','')}, {r.get('COMUNE','')}, Italy"
+                        loc = geo.geocode(addr, timeout=3)
                         r['coords'] = (loc.latitude, loc.longitude) if loc else (43.66, 11.30)
                     except: 
                         r['coords'] = (43.66, 11.30)
                 
-                # --- CALCOLO PERCORSO OTTIMO ---
+                # Ottimizzazione percorso
                 opt = []
-                punto_attuale = (43.661888, 11.305728) # Sede
+                punto_attuale = (43.661888, 11.305728) # Sede Strada in Chianti
                 while giro:
                     prossima = min(giro, key=lambda x: geodesic(punto_attuale, x['coords']).km)
                     opt.append(prossima)
@@ -102,7 +120,7 @@ if ws:
                     giro.remove(prossima)
                 
                 st.session_state.giro_igt = opt
-                parla("Giro pronto.")
+                parla("Giro generato. Buona strada!")
                 st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -112,31 +130,36 @@ if ws:
 
         for i, p in enumerate(st.session_state.giro_igt):
             with st.container():
-                st.markdown(f"<div class='tappa-card'><b>{i+1}. {p['CLIENTE']}</b><br>📍 {p['COMUNE']} - {p['INDIRIZZO']}</div>", unsafe_allow_html=True)
+                st.markdown(f"""<div class="tappa-card"><b>{i+1}. {p['CLIENTE']}</b><br>📍 {p.get('COMUNE','')} - {p.get('INDIRIZZO','')}</div>""", unsafe_allow_html=True)
                 
                 nota = st.text_area("Note visita:", key=f"n_{i}")
                 
                 c1, c2, c3 = st.columns(3)
                 with c1: 
-                    st.link_button("🚙 WAZE", f"https://waze.com/ul?q={p['INDIRIZZO'].replace(' ','%20')}%20{p['COMUNE']}&navigate=yes")
+                    st.link_button("🚙 WAZE", f"https://waze.com/ul?q={p.get('INDIRIZZO','').replace(' ','%20')}%20{p.get('COMUNE','')}&navigate=yes")
                 with c2: 
                     tel = str(p.get('TELEFONO','')).replace(".0","")
-                    if tel: st.link_button("📞 CHIAMA", f"tel:{tel}")
+                    if tel and tel != "": st.link_button("📞 CHIAMA", f"tel:{tel}")
                 with c3:
                     if st.button("✅ FATTO", key=f"f_{i}"):
                         try:
+                            # Scrittura su Google Sheets
                             riga = ws.find(str(p['CLIENTE']))
                             headers = [h.upper() for h in ws.row_values(1)]
-                            col_v = headers.index("VISITATO") + 1
-                            ws.update_cell(riga.row, col_v, "SI")
-                            
-                            if 'rep_serale' not in st.session_state: st.session_state.rep_serale = []
-                            st.session_state.rep_serale.append({"c": p['CLIENTE'], "cod": p.get('CODICE',''), "n": nota})
-                            
-                            st.session_state.giro_igt.pop(i)
-                            st.rerun()
+                            if "VISITATO" in headers:
+                                col_v = headers.index("VISITATO") + 1
+                                ws.update_cell(riga.row, col_v, "SI")
+                                
+                                # Salva per il report serale
+                                if 'rep_serale' not in st.session_state: st.session_state.rep_serale = []
+                                st.session_state.rep_serale.append({"c": p['CLIENTE'], "cod": p.get('CODICE',''), "n": nota})
+                                
+                                st.session_state.giro_igt.pop(i)
+                                st.rerun()
+                            else:
+                                st.error("Colonna VISITATO non trovata nel foglio!")
                         except Exception as e:
-                            st.error(f"Errore: {e}")
+                            st.error(f"Errore aggiornamento: {e}")
 
 # --- REPORT SERALE ---
 if 'rep_serale' in st.session_state and st.session_state.rep_serale:
