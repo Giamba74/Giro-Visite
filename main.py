@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 from datetime import datetime, timedelta
@@ -43,7 +44,6 @@ def agente_meteo(lat, lon):
 # --- 3. LOGICA DI CALCOLO ---
 st.title("⭐ BRIGHTSTAR PRO NAVIGATOR")
 
-# --- INSERISCI QUI IL TUO ID ---
 ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
 ws = get_gsheet_ws(ID_DEL_FOGLIO)
 
@@ -70,7 +70,7 @@ if ws:
             num_tappe = st.slider("Quante visite vuoi pianificare?", 5, 20, 10)
             
             if st.button("🚀 OTTIMIZZA PERCORSO E ORARI"):
-                with st.spinner("Pianificando il giro perfetto..."):
+                with st.spinner("Calcolo percorso intelligente..."):
                     giro = df[df['CLIENTE'].isin(forzati)].to_dict('records')
                     mask = df['CLIENTE'].isin(df_liberi['CLIENTE']) & ~df['CLIENTE'].isin(forzati)
                     if sel_comuni: mask &= df['COMUNE'].isin(sel_comuni)
@@ -79,31 +79,43 @@ if ws:
                     extra = df[mask].head(num_tappe - len(giro)).to_dict('records')
                     giro.extend(extra)
                     
-                    geo = Nominatim(user_agent="brightstar_v10")
+                    geo = Nominatim(user_agent="brightstar_v11")
                     for r in giro:
                         try:
                             loc = geo.geocode(f"{r['INDIRIZZO']}, {r['CAP']}, {r['COMUNE']}, Italy", timeout=3)
-                            r['coords'] = (loc.latitude, loc.longitude) if loc else SEDE
-                        except: r['coords'] = SEDE
+                            if loc:
+                                r['lat'], r['lon'] = loc.latitude, loc.longitude
+                                # Calcolo angolo rispetto alla sede per raggruppare le zone
+                                r['angle'] = np.arctan2(loc.latitude - SEDE[0], loc.longitude - SEDE[1])
+                                r['coords'] = (loc.latitude, loc.longitude)
+                            else:
+                                r['coords'], r['angle'] = SEDE, 0
+                        except: r['coords'], r['angle'] = SEDE, 0
+
+                    # ORDINAMENTO GEOGRAFICO (Evita i rimbalzi Arezzo-Bibbiena)
+                    # Ordiniamo prima per angolo (zona) e poi per distanza
+                    giro.sort(key=lambda x: (x.get('angle', 0), geodesic(SEDE, x['coords']).km))
 
                     opt = []
-                    punto = SEDE
+                    punto_precedente = SEDE
                     ora_attuale = datetime.now().replace(hour=7, minute=30, second=0, microsecond=0)
                     
-                    while giro:
-                        prox = min(giro, key=lambda x: geodesic(punto, x['coords']).km)
-                        dist = geodesic(punto, prox['coords']).km
-                        tempo_viaggio = (dist / 40) * 60 
+                    for prox in giro:
+                        dist = geodesic(punto_precedente, prox['coords']).km
+                        # Velocità 35km/h per gestire traffico e auto
+                        tempo_viaggio = (dist / 35) * 60 
                         ora_attuale += timedelta(minutes=tempo_viaggio)
                         prox['ora_arrivo'] = ora_attuale.strftime("%H:%M")
                         
-                        ora_attuale += timedelta(minutes=30)
+                        ora_attuale += timedelta(minutes=30) # Sosta fissa
                         prox['ora_partenza'] = ora_attuale.strftime("%H:%M")
                         
-                        opt.append(prox); punto = prox['coords']; giro.remove(prox)
+                        opt.append(prox)
+                        punto_precedente = prox['coords']
                     
-                    dist_rientro = geodesic(punto, SEDE).km
-                    ora_attuale += timedelta(minutes=(dist_rientro/40)*60)
+                    # Rientro finale a Strada in Chianti
+                    dist_rientro = geodesic(punto_precedente, SEDE).km
+                    ora_attuale += timedelta(minutes=(dist_rientro/35)*60)
                     
                     st.session_state.rientro = ora_attuale.strftime("%H:%M")
                     st.session_state.giro_igt = opt
@@ -111,33 +123,32 @@ if ws:
 
         if 'giro_igt' in st.session_state and 'rientro' in st.session_state:
             mezzo, sug, col_m = agente_meteo(43.66, 11.30)
-            
             st.info(f"📍 Rientro stimato a Strada in Chianti: **{st.session_state.rientro}**")
             
             rientro_dt = datetime.strptime(st.session_state.rientro, "%H:%M")
             if rientro_dt.hour < 18:
-                st.warning("⚠️ Finirai molto presto! Considera di aggiungere 2-3 tappe al cursore sopra.")
+                st.warning("⚠️ Finirai molto presto! Aggiungi tappe per ottimizzare la giornata.")
             elif rientro_dt.hour >= 19 and rientro_dt.minute > 30:
-                st.error("🚨 Attenzione: Il giro stimato supera le 19:30!")
+                st.error("🚨 Attenzione: Superamento orario 19:30!")
 
             for i, p in enumerate(st.session_state.giro_igt):
                 with st.container():
                     st.markdown(f"""
                     <div class="tappa-card">
-                        <span class="time-badge">Arrivo: {p['ora_arrivo']}</span><br>
+                        <span class="time-badge">Arrivo stimato: {p['ora_arrivo']}</span><br>
                         <b>{i+1}. {p['CLIENTE']}</b> (Cod: {p.get('CODICE','')})<br>
                         📍 {p.get('CAP','')} {p.get('COMUNE','')} - {p.get('INDIRIZZO','')}<br>
-                        ⏱️ Sosta prevista fino alle {p['ora_partenza']}
+                        ⏱️ Sosta di 30 min fino alle {p['ora_partenza']}
                     </div>
                     """, unsafe_allow_html=True)
                     
                     nota = st.text_area("Note visita:", key=f"n_{i}")
-                    col1, col2, col3 = st.columns(3)
-                    with col1: st.link_button("🚙 WAZE", f"https://waze.com/ul?q={p['INDIRIZZO']}%20{p['CAP']}%20{p['COMUNE']}&navigate=yes")
-                    with col2: 
+                    c1, c2, c3 = st.columns(3)
+                    with c1: st.link_button("🚙 WAZE", f"https://waze.com/ul?q={p['INDIRIZZO']}%20{p['CAP']}%20{p['COMUNE']}&navigate=yes")
+                    with c2: 
                         tel = p.get('TELEFONO','')
                         if tel: st.link_button("📞 CHIAMA", f"tel:{tel}")
-                    with col3:
+                    with c3:
                         if st.button("✅ FATTO", key=f"f_{i}"):
                             try:
                                 riga = ws.find(str(p['CLIENTE']))
