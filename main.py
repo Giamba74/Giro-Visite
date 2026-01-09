@@ -244,7 +244,7 @@ if ws:
                         score = dist_air
                         
                         # --- LOGICA PRIORITÀ ---
-                        # 1. Se è FORZATO (VIP) -> Priorità Massima (Punteggio negativo altissimo)
+                        # 1. Se è FORZATO (VIP) -> Priorità Massima
                         if p[c_nom] in sel_forced:
                             score -= 100000 
                         
@@ -305,13 +305,13 @@ if ws:
             if p[c_nom] in sel_forced:
                 forced_html = "<span class='forced-badge'>⭐ PRIORITARIO</span>"
 
-            # --- CARD HTML ---
+            # --- CARD HTML (SCHIACCIATO A SINISTRA) ---
             html_card = f"""
 <div class="client-card">
 <div class="card-header">
 <div style="display:flex; align-items:center;">
-    {forced_html}
-    <span class="client-name">{i+1}. {p[c_nom]}</span>
+{forced_html}
+<span class="client-name">{i+1}. {p[c_nom]}</span>
 </div>
 <div class="arrival-time">{ora_str}</div>
 </div>
