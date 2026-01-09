@@ -47,8 +47,8 @@ def get_google_data(nome, indirizzo, comune):
             }
     except: return None
 
-# --- 3. LOGICA DI CALCOLO ---
-ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
+# --- 3. LOGICA DI CONNESSIONE E CALCOLO ---
+ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0"
 
 @st.cache_resource
 def init_gsheet(sheet_id):
@@ -65,7 +65,7 @@ if ws:
     data = ws.get_all_values()
     df = pd.DataFrame(data[1:], columns=[h.strip().upper() for h in data[0]])
     
-    # Pulizia CAP per Firenze e simili
+    # Rilevamento Colonne e Pulizia
     c_cap = next((c for c in df.columns if "CAP" in c), "CAP")
     df[c_cap] = df[c_cap].astype(str).str.replace('.0', '', regex=False).str.pad(5, fillchar='0')
     
@@ -84,7 +84,9 @@ if ws:
         col1, col2, col3 = st.columns(3)
         with col1: sel_comuni = st.multiselect("📍 Comuni:", sorted(df[c_comune].unique().tolist()))
         with col2: sel_caps = st.multiselect("📮 CAP (es. Firenze):", sorted(df[c_cap].unique().tolist()))
-        with col3: tappe_max = st.slider("Numero visite:", 5, 20, 10)
+        with col3: tappe_max = st.slider("Numero tappe:", 5, 20, 10)
+        
+        inverti = st.checkbox("Inverti giro (inizia dal più lontano)")
         
         if st.button("🚀 GENERA GIRO OTTIMIZZATO"):
             mask = ~df[c_visitato].str.contains('SI|SÌ', case=False, na=False)
@@ -94,21 +96,19 @@ if ws:
             potenziali = df[mask].to_dict('records')
 
             if not potenziali:
-                st.warning("Nessun cliente trovato con questi filtri!")
+                st.warning("Nessun cliente trovato!")
             else:
-                with st.spinner("Calcolo rotta zonale in corso..."):
+                with st.spinner("Calcolo logistico zonale..."):
                     for p in potenziali:
                         g_data = get_google_data(p[c_cliente], p[c_indirizzo], p[c_comune])
                         p['coords'] = g_data['coords'] if g_data else SEDE_COORDS
                         p['g_tel'] = g_data['tel'] if g_data else p.get(c_tel, '')
-                        # Calcolo angolo rispetto alla sede per raggruppare geograficamente
+                        # Calcolo angolo e distanza per ordinamento a zone
                         p['angle'] = np.arctan2(p['coords'][0] - SEDE_COORDS[0], p['coords'][1] - SEDE_COORDS[1])
-                        p['dist_da_casa'] = geodesic(SEDE_COORDS, p['coords']).km
+                        p['dist_casa'] = geodesic(SEDE_COORDS, p['coords']).km
 
-                    # --- ALGORITMO DI ORDINAMENTO A ZONA ---
-                    # Ordiniamo prima per Comune, poi per CAP, poi per Angolo
-                    df_opt = pd.DataFrame(potenziali)
-                    df_opt = df_opt.sort_values(by=[c_comune, c_cap, 'angle', 'dist_da_casa'])
+                    # ORDINAMENTO: Comune -> CAP -> Angolo -> Distanza
+                    df_opt = pd.DataFrame(potenziali).sort_values(by=[c_comune, c_cap, 'angle', 'dist_casa'], ascending=not inverti)
                     
                     giro_final = []
                     punto_att = SEDE_COORDS
@@ -116,19 +116,26 @@ if ws:
                     
                     for _, r in df_opt.head(tappe_max).iterrows():
                         dist = geodesic(punto_att, r['coords']).km
-                        ora_arrivo = ora_att + timedelta(minutes=(dist/35)*60) # 35km/h media
+                        ora_arrivo = ora_att + timedelta(minutes=(dist/35)*60)
                         
+                        # Salvataggio ESPLICITO di tutte le chiavi per evitare KeyError
                         giro_final.append({
-                            "NOME": r[c_cliente], "COD": r[c_codice], "ORA": ora_arrivo.strftime("%H:%M"),
-                            "TEL": r['g_tel'], "COORDS": r['coords'], "COMUNE": r[c_comune], "CAP": r[c_cap]
+                            "NOME": r[c_cliente], 
+                            "COD": r[c_codice], 
+                            "ORA": ora_arrivo.strftime("%H:%M"),
+                            "TEL": r['g_tel'], 
+                            "COORDS": r['coords'], 
+                            "COMUNE": r[c_comune], 
+                            "CAP": r[c_cap]
                         })
-                        ora_att = ora_arrivo + timedelta(minutes=35) # 30 min visita + 5 spostamento
+                        ora_att = ora_arrivo + timedelta(minutes=35)
                         punto_att = r['coords']
 
                     st.session_state.giro_igt = giro_final
                     st.session_state.rientro = (ora_att + timedelta(minutes=(geodesic(punto_att, SEDE_COORDS).km/35)*60)).strftime("%H:%M")
                     st.rerun()
 
+    # --- 4. VISUALIZZAZIONE RISULTATI ---
     if 'giro_igt' in st.session_state:
         st.info(f"🏁 Rientro a Strada in Chianti: **{st.session_state.rientro}**")
         for i, p in enumerate(st.session_state.giro_igt):
