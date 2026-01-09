@@ -39,7 +39,8 @@ st.markdown("""
     .highlight { color: #38bdf8; font-weight: 600; }
     .real-traffic { color: #f59e0b; font-size: 0.8rem; font-style: italic; }
     .ai-badge { font-size: 0.75rem; background-color: #334155; color: #cbd5e1; padding: 2px 8px; border-radius: 4px; }
-    
+    .forced-badge { font-size: 0.8rem; color: #fbbf24; font-weight: bold; border: 1px solid #fbbf24; padding: 2px 6px; border-radius: 4px; margin-right: 10px;}
+
     @keyframes pulse {
         0% { box-shadow: 0 0 0 0 rgba(168, 85, 247, 0.4); }
         70% { box-shadow: 0 0 0 10px rgba(168, 85, 247, 0); }
@@ -60,15 +61,19 @@ ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0"
 
 # --- AGENTI INTELLIGENTI ---
 def agente_strategico(note_precedenti):
+    """Analizza lo storico e dà consigli comportamentali"""
     if not note_precedenti: 
         return "ℹ️ COACH: Nessuno storico recente. Raccogli info.", "background: rgba(51, 65, 85, 0.5); border: 1px solid #64748b;"
+    
     txt = str(note_precedenti).lower()
+    
     if any(x in txt for x in ['arrabbiato', 'reclamo', 'ritardo', 'problema', 'rotto']):
-        return "🛡️ COACH: Cliente a rischio. Empatia massima.", "background: rgba(153, 27, 27, 0.6); border: 1px solid #f87171;"
+        return "🛡️ COACH: Cliente a rischio. Empatia massima. Risolvi prima di vendere.", "background: rgba(153, 27, 27, 0.6); border: 1px solid #f87171;"
     if any(x in txt for x in ['prezzo', 'costoso', 'sconto', 'caro']):
-        return "💎 COACH: Difendi il valore. Non svendere.", "background: rgba(146, 64, 14, 0.6); border: 1px solid #fb923c;"
+        return "💎 COACH: Difendi il valore. Non svendere. Parla di qualità e servizio.", "background: rgba(146, 64, 14, 0.6); border: 1px solid #fb923c;"
     if any(x in txt for x in ['interessato', 'preventivo', 'forse']):
-        return "🎯 COACH: È caldo! Oggi devi chiudere.", "background: rgba(22, 101, 52, 0.6); border: 1px solid #4ade80;"
+        return "🎯 COACH: È caldo! Oggi devi chiudere. Porta il contratto.", "background: rgba(22, 101, 52, 0.6); border: 1px solid #4ade80;"
+    
     return f"ℹ️ MEMO: {note_precedenti[:50]}...", "background: rgba(51, 65, 85, 0.6); border: 1px solid #94a3b8;"
 
 def agente_meteo_territoriale():
@@ -77,14 +82,17 @@ def agente_meteo_territoriale():
         url = f"https://api.open-meteo.com/v1/forecast?latitude={lats}&longitude={lons}&hourly=temperature_2m,precipitation_probability&timezone=Europe%2FRome&forecast_days=1"
         res = requests.get(url).json()
         res = res if isinstance(res, list) else [res]
+        
         bad_weather = False
         details = []
         for i, z in enumerate(res):
             nome = ["Chianti", "Firenze", "Arezzo"][i]
+            # Ore lavorative 09-18
             rain = max(z['hourly']['precipitation_probability'][9:18])
             temp = sum(z['hourly']['temperature_2m'][9:18]) / 9
             details.append(f"{nome}: {int(temp)}°C/Pioggia {rain}%")
             if rain > 30 or temp < 8: bad_weather = True
+            
         msg = f"AUTO 🚗 (Meteo Incerto: {', '.join(details)})" if bad_weather else "ZONTES 350 🛵 (Via Libera!)"
         style = "background: linear-gradient(90deg, #b91c1c, #ef4444);" if bad_weather else "background: linear-gradient(90deg, #15803d, #22c55e);"
         return msg, style
@@ -171,30 +179,38 @@ if ws:
         st.title("⚙️ Filtri")
         sel_zona = st.multiselect("Zona", sorted(df[c_com].unique()))
         sel_cap = st.multiselect("CAP", sorted(df[c_cap].unique()) if c_cap in df.columns else [])
+        
         st.divider()
+        st.markdown("### ⭐ Forzature (VIP)")
+        # LISTA DI TUTTI I CLIENTI PER LA RICERCA
+        all_clients = sorted(df[c_nom].unique().tolist())
+        sel_forced = st.multiselect("Seleziona clienti da visitare OGGI (ignora zona):", all_clients)
 
     st.markdown("### 🚀 Brightstar AI Real-Time")
     
     msg, style = agente_meteo_territoriale()
     st.markdown(f"<div class='meteo-card' style='{style}'>{msg}</div>", unsafe_allow_html=True)
 
-    # --- TASTO CALCOLO CON DIAGNOSTICA INCLUSA ---
-    if st.button("CALCOLA GIRO", type="primary", use_container_width=True):
-        st.write("🔄 Avvio calcolo...")
+    if st.button("CALCOLA GIRO (ORARIO ITALIA)", type="primary", use_container_width=True):
+        # 1. Filtro Standard (Non Visitati + Zona + CAP)
+        mask_standard = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
+        if sel_zona: mask_standard &= df[c_com].isin(sel_zona)
+        if sel_cap: mask_standard &= df[c_cap].isin(sel_cap)
         
-        # 1. Filtri
-        mask = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
-        if sel_zona: mask &= df[c_com].isin(sel_zona)
-        if sel_cap: mask &= df[c_cap].isin(sel_cap)
+        # 2. Filtro Forzati (Solo i nomi scelti, anche se già visitati o fuori zona)
+        mask_forced = df[c_nom].isin(sel_forced)
         
-        raw = df[mask].to_dict('records')
+        # 3. Unione dei due gruppi (Priorità ai forzati)
+        df_standard = df[mask_standard].copy()
+        df_forced = df[mask_forced].copy()
         
-        # 2. Controllo se ci sono clienti
-        if not raw:
-            st.error(f"⛔ Nessun cliente trovato! Controlla: 1. Colonna VISITATO (non deve essere tutti 'SI'). 2. Filtri Zona ({sel_zona}).")
+        # Uniamo rimuovendo duplicati (se un forzato era già nella zona)
+        df_final = pd.concat([df_forced, df_standard]).drop_duplicates(subset=[c_nom])
+        
+        raw = df_final.to_dict('records')
+        
+        if not raw: st.warning("Nessun cliente.")
         else:
-            st.success(f"✅ Trovati {len(raw)} clienti. Elaborazione con Google Maps...")
-            
             with st.spinner("⏳ Analisi Traffico, Strategia e Canvass..."):
                 rotta = []
                 now = datetime.now(TZ_ITALY)
@@ -211,23 +227,31 @@ if ws:
                 while pool and curr_t < limit:
                     best = None
                     best_score = float('inf')
+                    
                     for p in pool:
                         if 'g_data' not in p:
                             p['g_data'] = get_google_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_nom]}, {p[c_com]}"])
-                            if not p['g_data']: 
-                                # Se Google non trova, logghiamo un warning ma non rompiamo tutto
-                                p['g_data'] = {'coords': None, 'found': False, 'periods': []}
-                        
+                            if not p['g_data']: p['g_data'] = {'coords': None, 'found': False, 'periods': []}
+
                         if not p['g_data']['found']: continue
 
                         dist_air = geodesic(curr_loc, p['g_data']['coords']).km
                         est_min = (dist_air * 1.5 / 40) * 60 
                         est_arr = curr_t + timedelta(minutes=est_min)
+                        
                         if est_arr > limit: continue
                         
                         score = dist_air
-                        if c_canv and p.get(c_canv) and str(p[c_canv]).strip():
+                        
+                        # --- LOGICA PRIORITÀ ---
+                        # 1. Se è FORZATO (VIP) -> Priorità Massima (Punteggio negativo altissimo)
+                        if p[c_nom] in sel_forced:
+                            score -= 100000 
+                        
+                        # 2. Se ha CANVASS -> Priorità Media
+                        elif c_canv and p.get(c_canv) and str(p[c_canv]).strip():
                             score -= 3 
+                            
                         if score < best_score:
                             best_score = score
                             best = p
@@ -235,28 +259,28 @@ if ws:
                     if best:
                         real_mins = get_real_travel_time(curr_loc, best['g_data']['coords'])
                         arrival_real = curr_t + timedelta(minutes=real_mins)
+                        
                         if arrival_real > limit:
                             pool.remove(best)
                             continue
+
                         dur_visita, learned = get_ai_duration(ws_ai, best[c_nom])
+                        
                         best['arr'] = arrival_real
                         best['travel_time'] = real_mins
                         best['duration'] = dur_visita
                         best['learned'] = learned
+                        
                         rotta.append(best)
                         curr_t = arrival_real + timedelta(minutes=dur_visita)
                         curr_loc = best['g_data']['coords']
                         pool.remove(best)
                     else: break
                 
-                if not rotta:
-                    st.warning("⚠️ Nessuna rotta generata. Forse l'orario è troppo tardi (dopo le 19:30) o gli indirizzi non sono validi.")
-                
                 st.session_state.master_route = rotta
                 st.rerun()
 
-    # --- VISUALIZZAZIONE CARDS ---
-    if 'master_route' in st.session_state and st.session_state.master_route:
+    if 'master_route' in st.session_state:
         route = st.session_state.master_route
         end_time = route[-1]['arr'].strftime("%H:%M") if route else "--:--"
         st.caption(f"🏁 Rientro previsto: {end_time}")
@@ -276,11 +300,19 @@ if ws:
                 if txt:
                     canvass_html = f"<div class='canvass-box'>📢 CANVASS: {txt}</div>"
             
+            # BADGE FORZATO
+            forced_html = ""
+            if p[c_nom] in sel_forced:
+                forced_html = "<span class='forced-badge'>⭐ PRIORITARIO</span>"
+
             # --- CARD HTML ---
             html_card = f"""
 <div class="client-card">
 <div class="card-header">
-<span class="client-name">{i+1}. {p[c_nom]}</span>
+<div style="display:flex; align-items:center;">
+    {forced_html}
+    <span class="client-name">{i+1}. {p[c_nom]}</span>
+</div>
 <div class="arrival-time">{ora_str}</div>
 </div>
 {canvass_html}
@@ -299,12 +331,10 @@ if ws:
 """
             st.markdown(html_card, unsafe_allow_html=True)
 
-            # --- SPAZIO NOTE VOCALI ---
             current_note = p.get('NOTE_SESSION', '')
             new_note = st.text_area(f"🎤 Note per {p[c_nom]}:", value=current_note, key=f"note_{i}", height=70)
             st.session_state.master_route[i]['NOTE_SESSION'] = new_note
             
-            # --- BOTTONI ---
             c1, c2, c3 = st.columns([1, 1, 1])
             with c1:
                 coords = p['g_data']['coords']
@@ -322,7 +352,6 @@ if ws:
                         st.rerun()
                     except: st.error("Errore DB")
 
-        # --- PULSANTE FINALE REPORT ---
         st.divider()
         if st.button("📧 INVIA REPORT GIORNALIERO", type="secondary", use_container_width=True):
             report_lines = []
