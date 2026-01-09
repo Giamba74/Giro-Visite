@@ -58,17 +58,21 @@ ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" # <--- RIMETTI IL
 
 def agente_strategico(note_precedenti):
     """Analizza lo storico e dà consigli comportamentali"""
-    if not note_precedenti: return None, None
+    # CORREZIONE: Se vuoto, ritorna stile Neutro (Grigio), NON None
+    if not note_precedenti: 
+        return "ℹ️ COACH: Nessuno storico recente. Raccogli info.", "background: rgba(51, 65, 85, 0.5); border: 1px solid #64748b;"
+    
     txt = str(note_precedenti).lower()
     
     if any(x in txt for x in ['arrabbiato', 'reclamo', 'ritardo', 'problema', 'rotto']):
-        return "🛡️ COACH: Cliente a rischio. Empatia massima. Risolvi prima di vendere.", "background: rgba(153, 27, 27, 0.6); border-color: #f87171;"
+        return "🛡️ COACH: Cliente a rischio. Empatia massima. Risolvi prima di vendere.", "background: rgba(153, 27, 27, 0.6); border: 1px solid #f87171;"
     if any(x in txt for x in ['prezzo', 'costoso', 'sconto', 'caro']):
-        return "💎 COACH: Difendi il valore. Non svendere. Parla di qualità e servizio.", "background: rgba(146, 64, 14, 0.6); border-color: #fb923c;"
+        return "💎 COACH: Difendi il valore. Non svendere. Parla di qualità e servizio.", "background: rgba(146, 64, 14, 0.6); border: 1px solid #fb923c;"
     if any(x in txt for x in ['interessato', 'preventivo', 'forse']):
-        return "🎯 COACH: È caldo! Oggi devi chiudere. Porta il contratto.", "background: rgba(22, 101, 52, 0.6); border-color: #4ade80;"
+        return "🎯 COACH: È caldo! Oggi devi chiudere. Porta il contratto.", "background: rgba(22, 101, 52, 0.6); border: 1px solid #4ade80;"
     
-    return f"ℹ️ MEMO: Ultima nota: '{note_precedenti[:60]}...'", "background: rgba(51, 65, 85, 0.6); border-color: #94a3b8;"
+    # Default se c'è testo ma nessuna parola chiave
+    return f"ℹ️ MEMO: {note_precedenti[:50]}...", "background: rgba(51, 65, 85, 0.6); border: 1px solid #94a3b8;"
 
 def agente_meteo_territoriale():
     try:
@@ -320,3 +324,4 @@ if ws:
                         st.session_state.master_route.pop(i)
                         st.rerun()
                     except: st.error("Errore DB")
+
