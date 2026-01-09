@@ -9,165 +9,95 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # --- 1. CONFIGURAZIONE PAGINA ---
-st.set_page_config(page_title="Brightstar Pro AI", page_icon="⭐", layout="wide")
+st.set_page_config(page_title="Brightstar Pro Navigator", page_icon="⭐", layout="wide")
 
 st.markdown("""
     <style>
     .stApp { background-color: #001a41; }
-    .header-box { background-color: #00122e; padding: 15px; border-radius: 15px; border: 1px solid #FFD700; margin-bottom: 20px; border: 1px solid #FFD700; }
-    .tappa-card { padding: 15px; border-radius: 12px; background-color: #00122e; border-left: 8px solid #FFD700; margin-bottom: 5px; color: white; border-bottom: 1px solid #333; }
+    .header-box { background-color: #00122e; padding: 20px; border-radius: 15px; border: 1px solid #FFD700; margin-bottom: 25px; }
+    .tappa-card { padding: 15px; border-radius: 12px; background-color: #00122e; border-left: 8px solid #FFD700; margin-bottom: 8px; color: white; border-bottom: 1px solid #333; }
     .stButton>button { width: 100%; border-radius: 12px; height: 3.5em; background: linear-gradient(135deg, #FFD700 0%, #C5A000 100%); color: #002D72 !important; font-weight: bold; border: none; }
     div.stButton > button[key^="f_"] { background: #28a745 !important; color: white !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. FUNZIONI CORE (STABILI) ---
+# --- 2. FUNZIONI AGENTI ---
 def parla(testo):
     st.components.v1.html(f"""<script>var msg = new SpeechSynthesisUtterance('{testo}'); msg.lang = 'it-IT'; window.speechSynthesis.speak(msg);</script>""", height=0)
 
-@st.cache_resource(show_spinner="Sincronizzazione con Google Database...")
-def get_gsheet_client():
-    """Connessione robusta che evita l'errore Response 200"""
+@st.cache_resource(show_spinner="Connessione al Database Google...")
+def get_gsheet_ws(sheet_id):
+    """Connessione ultra-rapida tramite ID univoco"""
     try:
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
-        return gspread.authorize(creds)
+        client = gspread.authorize(creds)
+        # Apertura diretta per ID (evita Response 200)
+        sh = client.open_by_key(sheet_id)
+        return sh.get_worksheet(0)
     except Exception as e:
-        st.error(f"Errore inizializzazione API: {e}")
+        st.error(f"Errore di connessione API: {e}")
         return None
 
-def carica_dati_fogli(client, nome_file):
+def agente_meteo(lat, lon):
+    """Check meteo per decidere tra Zontes e Auto"""
     try:
-        # Apre il file e carica il primo foglio
-        sh = client.open(nome_file)
-        ws = sh.get_worksheet(0)
-        data = ws.get_all_records()
-        df = pd.DataFrame(data)
-        # Normalizza nomi colonne in MAIUSCOLO per evitare errori di battitura
-        df.columns = [str(c).strip().upper() for c in df.columns]
-        return ws, df
-    except Exception as e:
-        st.error(f"Impossibile leggere il file '{nome_file}': {e}")
-        return None, None
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation_probability&timezone=Europe%2FRome&forecast_days=1"
+        res = requests.get(url).json()
+        temp = res['hourly']['temperature_2m'][8] # Ore 8:00
+        pioggia = max(res['hourly']['precipitation_probability'][8:18])
+        if temp < 3 or pioggia > 30:
+            return "AUTO 🚗", f"{temp}°C / {pioggia}% pioggia. Usa l'auto.", "#ff4b4b"
+        return "ZONTES 350D 🛵", f"Meteo perfetto ({temp}°C). Vai di scooter!", "#28a745"
+    except: return "INFO", "Meteo non disp.", "#FFD700"
 
-def agente_meteo_decisione(tappe):
-    """Agente che decide tra Zontes e Auto (Solo Lun-Ven)"""
-    if datetime.now().weekday() >= 5: return None, None, None
-    try:
-        # Check su Firenze/Arezzo (centro zona)
-        res = requests.get("https://api.open-meteo.com/v1/forecast?latitude=43.66&longitude=11.30&hourly=temperature_2m,precipitation_probability&timezone=Europe%2FRome&forecast_days=1").json()
-        temp_min = res['hourly']['temperature_2m'][8] # ore 8:00
-        pioggia_max = max(res['hourly']['precipitation_probability'][8:18]) # max prob giornata
-        
-        if temp_min < 3 or pioggia_max > 30:
-            return "AUTO 🚗", f"Previsti {temp_min}°C e {pioggia_max}% pioggia. Prendi l'auto.", "#ff4b4b"
-        return "ZONTES 350D 🛵", f"Meteo perfetto ({temp_min}°C). Vai di scooter!", "#28a745"
-    except: return "INFO", "Meteo non disponibile", "#FFD700"
-
-# --- 3. LOGICA APPLICATIVA ---
+# --- 3. LOGICA PRINCIPALE ---
 st.title("⭐ BRIGHTSTAR PRO NAVIGATOR")
 
-# 1. Connessione
-client = get_gsheet_client()
-# MODIFICA QUI: Metti il nome esatto del tuo file Google Sheets
-NOME_FILE_GS = "GiroVisite_Dati" 
+# MODIFICA QUI: Incolla l'ID del tuo foglio Google tra le virgolette
+ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
 
-if client:
-    ws, df = carica_dati_fogli(client, NOME_FILE_GS)
+ws = get_gsheet_ws(ID_DEL_FOGLIO)
+
+if ws:
+    # Caricamento dati
+    if 'df_db' not in st.session_state:
+        data = ws.get_all_records()
+        df = pd.DataFrame(data)
+        df.columns = [str(c).strip().upper() for c in df.columns]
+        st.session_state.df_db = df
     
-    if df is not None:
-        # Escludi i già visitati
-        df_disponibili = df[~df['VISITATO'].astype(str).str.upper().str.contains('SI|SÌ', na=False)]
+    df = st.session_state.df_db
 
-        # --- SEZIONE FILTRI ---
-        with st.container():
-            st.markdown("<div class='header-box'>", unsafe_allow_html=True)
-            col1, col2 = st.columns(2)
-            with col1:
-                comuni_list = sorted(df['COMUNE'].unique().tolist()) if 'COMUNE' in df.columns else []
-                sel_comuni = st.multiselect("📍 Filtra per Comune:", comuni_list)
-            with col2:
-                forzati = st.multiselect("📌 Clienti Prioritari (Obbligatori):", sorted(df['CLIENTE'].unique().tolist()))
-            
-            if st.button("🚀 GENERA PIANO 10 TAPPE"):
-                with st.spinner("Ottimizzazione percorso in corso..."):
-                    # Selezione
-                    giro = df[df['CLIENTE'].isin(forzati)].to_dict('records')
-                    mask = df['CLIENTE'].isin(df_disponibili['CLIENTE']) & ~df['CLIENTE'].isin(forzati)
-                    if sel_comuni: mask &= df['COMUNE'].isin(sel_comuni)
-                    
-                    extra = df[mask].head(10 - len(giro)).to_dict('records')
-                    giro.extend(extra)
-                    
-                    # Geocoding veloce
-                    geolocator = Nominatim(user_agent="bright_pro_nav")
-                    for r in giro:
-                        addr = f"{r.get('INDIRIZZO','')}, {r.get('COMUNE','')}, Italy"
-                        try:
-                            l = geolocator.geocode(addr, timeout=3)
-                            r['coords'] = (l.latitude, l.longitude) if l else (43.66, 11.30)
-                        except: r['coords'] = (43.66, 11.30)
-                    
-                    # Ordinamento chilometrico
-                    opt = []
-                    pos = (43.661888, 11.305728) # Sede Strada in Chianti
-                    while giro:
-                        prox = min(giro, key=lambda x: geodesic(pos, x['coords']).km)
-                        opt.append(prox); pos = prox['coords']; giro.remove(prox)
-                    
-                    st.session_state.giro_igt = opt
-                    parla(f"Giro generato con successo per {len(opt)} tappe.")
-                    st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
+    # Filtraggio visitati
+    df_liberi = df[~df['VISITATO'].astype(str).str.upper().str.contains('SI|SÌ', na=False)]
 
-        # --- SEZIONE TAPPE ---
-        if 'giro_igt' in st.session_state and st.session_state.giro_igt:
-            mezzo, sug, col_m = agente_meteo_decisione(st.session_state.giro_igt)
-            if mezzo:
-                st.markdown(f"<div style='border:2px solid {col_m}; padding:10px; border-radius:10px; text-align:center; color:white; margin-bottom:10px;'><b>{mezzo}</b>: {sug}</div>", unsafe_allow_html=True)
-
-            for i, p in enumerate(st.session_state.giro_igt):
-                with st.container():
-                    st.markdown(f"""<div class="tappa-card"><b>{i+1}. {p['CLIENTE']}</b> (Cod: {p.get('CODICE','')})<br>📍 {p['COMUNE']} - {p['INDIRIZZO']}</div>""", unsafe_allow_html=True)
-                    
-                    nota = st.text_area(f"Note per {p['CLIENTE']}:", key=f"n_{i}", placeholder="Dettami eventuali problemi o materiali...")
-                    
-                    c1, c2, c3 = st.columns(3)
-                    with c1:
-                        st.link_button("🚙 WAZE", f"https://waze.com/ul?q={p['INDIRIZZO'].replace(' ','%20')}%20{p['COMUNE']}&navigate=yes")
-                    with c2:
-                        tel = str(p.get('TELEFONO','')).replace(".0","")
-                        if tel: st.link_button("📞 CHIAMA", f"tel:{tel}")
-                    with c3:
-                        if st.button("✅ FATTO", key=f"f_{i}"):
-                            try:
-                                # SCRITTURA SU GOOGLE SHEET
-                                cella = ws.find(str(p['CLIENTE']))
-                                headers = [h.upper() for h in ws.row_values(1)]
-                                col_v = headers.index("VISITATO") + 1
-                                ws.update_cell(cella.row, col_v, "SI")
-                                
-                                # Salva per report mail
-                                if 'report_dati' not in st.session_state: st.session_state.report_dati = []
-                                st.session_state.report_dati.append({"c": p['CLIENTE'], "cod": p.get('CODICE',''), "n": nota})
-                                
-                                st.session_state.giro_igt.pop(i)
-                                parla("Tappa salvata sul database.")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Errore aggiornamento: {e}")
-
-        # --- REPORT FINALE ---
-        if 'report_dati' in st.session_state and st.session_state.report_dati:
-            st.divider()
-            if st.button("📧 GENERA REPORT MAIL SERALE"):
-                data_oggi = datetime.now().strftime("%d/%m/%Y")
-                corpo = f"REPORT VISITE GIORNALIERO - {data_oggi}\n"
-                corpo += "--------------------------------------\n\n"
-                for r in st.session_state.report_dati:
-                    corpo += f"📍 {r['c']} (Cod: {r['cod']})\nNOTE: {r['n']}\n\n"
+    with st.container():
+        st.markdown("<div class='header-box'>", unsafe_allow_html=True)
+        col1, col2 = st.columns(2)
+        with col1:
+            comuni = st.multiselect("📍 Comuni:", sorted(df['COMUNE'].unique().tolist()) if 'COMUNE' in df.columns else [])
+        with col2:
+            forzati = st.multiselect("📌 Clienti Obbligatori:", sorted(df['CLIENTE'].unique().tolist()) if 'CLIENTE' in df.columns else [])
+        
+        if st.button("🚀 GENERA 10 VISITE OTTIMIZZATE"):
+            with st.spinner("Calcolo percorso..."):
+                # Selezione
+                giro = df[df['CLIENTE'].isin(forzati)].to_dict('records')
+                mask = df['CLIENTE'].isin(df_liberi['CLIENTE']) & ~df['CLIENTE'].isin(forzati)
+                if comuni: mask &= df['COMUNE'].isin(comuni)
                 
-                subj = f"REPORT VISITE DEL {data_oggi} - GIAMBATTISTA GIACCHETTI"
-                link = f"mailto:giambattista.giacchetti@gmail.com?subject={urllib.parse.quote(subj)}&body={urllib.parse.quote(corpo)}"
-                st.link_button("Invia Email a Giambattista", link)
-
+                extra = df[mask].head(10 - len(giro)).to_dict('records')
+                giro.extend(extra)
+                
+                # Geocoding veloce
+                geo = Nominatim(user_agent="brightstar_v4")
+                for r in giro:
+                    try:
+                        loc = geo.geocode(f"{r['INDIRIZZO']}, {r['COMUNE']}, Italy", timeout=3)
+                        r['coords'] = (loc.latitude, loc.longitude) if loc else (43.66, 11.30)
+                    except: r['coords'] = (43.66, 11.30)
+                
+                # Ordinamento per distanza dalla sede (Strada in Chianti)
+                opt = []
+                pos = (43
