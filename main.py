@@ -124,9 +124,8 @@ if ws:
                 
                 c1, c2, c3 = st.columns(3)
                 with c1: 
-                    # LINK NAVIGAZIONE CORRETTO: Forza Google Maps sulle coordinate del cliente
-                    nav_url = f"https://www.google.com/maps/dir/?api=1&destination={p['LAT']},{p['LON']}&travelmode=driving"
-                    st.link_button("🚙 NAVIGA", nav_url)
+                nav_url = f"https://www.google.com/maps/dir/?api=1&destination={p['LAT']},{p['LON']}&travelmode=driving"
+                   st.link_button("🚙 NAVIGA", nav_url)
                 with c2: 
                     if p['TEL']: st.link_button("📞 CHIAMA", f"tel:{p['TEL']}")
                 with c3:
@@ -140,3 +139,4 @@ if ws:
                 st.info("Email inviata con le note vocali salvate!")
             else:
                 st.warning("Nessuna nota inserita, email non inviata.")
+
