@@ -7,9 +7,13 @@ import urllib.parse
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
+import pytz # <--- LIBRERIA PER IL FUSO ORARIO
 
 # --- 1. CONFIGURAZIONE ---
 st.set_page_config(page_title="Brightstar AI PRO", page_icon="🧠", layout="wide")
+
+# Forziamo l'orario Italiano
+TZ_ITALY = pytz.timezone('Europe/Rome')
 
 st.markdown("""
     <style>
@@ -31,16 +35,11 @@ SEDE_COORDS = COORDS["Chianti"]
 API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
 ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" # <--- RIMETTI IL TUO ID
 
-# --- 2. FUNZIONI CRITICHE (TRAFFICO REALE) ---
+# --- 2. FUNZIONI CRITICHE ---
 def get_real_travel_time(origin_coords, dest_coords):
-    """
-    Chiede a Google Maps il tempo di guida REALE in questo momento.
-    Ritorna: minuti (int)
-    """
     if not API_KEY: 
-        # Fallback matematico migliorato per la montagna (Fattore 1.5x)
         dist = geodesic(origin_coords, dest_coords).km
-        return int(((dist * 1.5) / 40) * 60) # Stima 40km/h su strade curve
+        return int(((dist * 1.5) / 40) * 60)
         
     try:
         url = f"https://maps.googleapis.com/maps/api/distancematrix/json?origins={origin_coords[0]},{origin_coords[1]}&destinations={dest_coords[0]},{dest_coords[1]}&departure_time=now&mode=driving&key={API_KEY}"
@@ -48,13 +47,9 @@ def get_real_travel_time(origin_coords, dest_coords):
         if res['status'] == 'OK':
             elem = res['rows'][0]['elements'][0]
             if elem['status'] == 'OK':
-                # duration_in_traffic è il tempo con il traffico attuale
                 seconds = elem.get('duration_in_traffic', elem.get('duration'))['value']
-                return int(seconds / 60) # Ritorna minuti
-    except:
-        pass
-    
-    # Se fallisce API, fallback matematico
+                return int(seconds / 60)
+    except: pass
     dist = geodesic(origin_coords, dest_coords).km
     return int(((dist * 1.5) / 45) * 60)
 
@@ -97,7 +92,7 @@ def agente_meteo_territoriale():
         return msg, style
     except: return "METEO N/D", "background: #64748b;"
 
-# --- 3. CONNESSIONE DB ---
+# --- 3. DATABASE E AI ---
 @st.cache_resource
 def connect_db():
     try:
@@ -112,19 +107,19 @@ def get_ai_duration(ws_log, cliente):
     if not ws_log: return 20, False
     try:
         df = pd.DataFrame(ws_log.get_all_records())
-        if df.empty: return 20, False
-        hist = df[df['CLIENTE'] == cliente]
-        if not hist.empty: return int(hist['DURATA_MIN'].mean()), True
+        if not df.empty:
+            hist = df[df['CLIENTE'] == cliente]
+            if not hist.empty: return int(hist['DURATA_MIN'].mean()), True
     except: pass
     return 20, False
 
 def log_visit(ws_log, cliente, durata):
     if ws_log:
         if not ws_log.get_all_values(): ws_log.append_row(["CLIENTE", "DATA", "ORA", "DURATA_MIN"])
-        now = datetime.now()
+        now = datetime.now(TZ_ITALY) # Ora Italiana nel Log
         ws_log.append_row([cliente, now.strftime("%Y-%m-%d"), now.strftime("%H:%M"), durata])
 
-# --- 4. INTERFACCIA ---
+# --- 4. APP INTERFACE ---
 ws, ws_ai = connect_db()
 
 if ws:
@@ -148,7 +143,7 @@ if ws:
     msg, style = agente_meteo_territoriale()
     st.markdown(f"<div class='meteo-card' style='{style}'>{msg}</div>", unsafe_allow_html=True)
 
-    if st.button("CALCOLA GIRO (TEMPI REALI)", type="primary", use_container_width=True):
+    if st.button("CALCOLA GIRO (ORARIO ITALIA)", type="primary", use_container_width=True):
         mask = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
         if sel_zona: mask &= df[c_com].isin(sel_zona)
         if sel_cap: mask &= df[c_cap].isin(sel_cap)
@@ -157,13 +152,19 @@ if ws:
         
         if not raw: st.warning("Nessun cliente.")
         else:
-            with st.spinner("⏳ Calcolo traffico reale con Google Matrix..."):
+            with st.spinner("⏳ Sincronizzazione traffico e orari..."):
                 rotta = []
-                now = datetime.now()
-                # Se è sera o mattina presto, simula partenza 07:30 domani
-                start_t = now if (7 <= now.hour < 19) else now.replace(hour=7, minute=30) + timedelta(days=(1 if now.hour>=19 else 0))
-                limit = start_t.replace(hour=19, minute=30)
+                # FIX: Ora Italiana
+                now = datetime.now(TZ_ITALY)
                 
+                # Se premiamo il tasto dopo le 19:30, pianifichiamo per domani 07:30
+                if now.hour >= 19 or now.hour < 6:
+                    start_t = now.replace(hour=7, minute=30, second=0)
+                    if now.hour >= 19: start_t += timedelta(days=1)
+                else:
+                    start_t = now
+                    
+                limit = start_t.replace(hour=19, minute=30)
                 curr_t = start_t
                 curr_loc = SEDE_COORDS
                 pool = raw.copy()
@@ -173,74 +174,73 @@ if ws:
                     best_score = float('inf')
                     
                     for p in pool:
-                        # Recupero dati GPS
                         if 'g_data' not in p:
                             p['g_data'] = get_google_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_nom]}, {p[c_com]}"])
                             if not p['g_data']: 
                                 p['g_data'] = {'coords': None, 'found': False, 'periods': []}
 
-                        # SE NON TROVA COORDINATE, SALTA IL CLIENTE (Così non mette 0 min)
-                        if not p['g_data']['found']:
-                            continue
+                        if not p['g_data']['found']: continue
 
-                        # 1. Stima veloce per ordinamento (Matematica con fattore montagna)
+                        # Stima preliminare (per non chiamare API su tutti)
                         dist_air = geodesic(curr_loc, p['g_data']['coords']).km
                         est_min = (dist_air * 1.5 / 40) * 60 
                         est_arr = curr_t + timedelta(minutes=est_min)
                         
                         if est_arr > limit: continue
                         
-                        # Score: Priorità vicinanza geografica
                         score = dist_air
                         if score < best_score:
                             best_score = score
                             best = p
                     
                     if best:
-                        # 2. CALCOLO REALE SOLO SUL VINCITORE (Per risparmiare API e tempo)
-                        # Qui chiediamo a Google: "Quanto ci vuole davvero ORA?"
+                        # Calcolo Tempo REALE con API
                         real_mins = get_real_travel_time(curr_loc, best['g_data']['coords'])
-                        
                         arrival_real = curr_t + timedelta(minutes=real_mins)
                         
-                        # Se anche col tempo reale sforiamo le 19:30, scartiamo e riproviamo
                         if arrival_real > limit:
                             pool.remove(best)
                             continue
 
-                        # Recupero durata visita AI
                         dur_visita, learned = get_ai_duration(ws_ai, best[c_nom])
                         
                         best['arr'] = arrival_real
                         best['travel_time'] = real_mins
                         best['duration'] = dur_visita
                         best['learned'] = learned
-                        best['is_open'] = True # Semplificato per focus su tempi guida
+                        best['is_open'] = True
                         
                         rotta.append(best)
                         curr_t = arrival_real + timedelta(minutes=dur_visita)
                         curr_loc = best['g_data']['coords']
                         pool.remove(best)
-                    else:
-                        break # Nessun altro cliente raggiungibile
+                    else: break
                 
                 st.session_state.master_route = rotta
                 st.rerun()
 
     if 'master_route' in st.session_state:
         route = st.session_state.master_route
-        end = route[-1]['arr'].strftime("%H:%M") if route else "--:--"
-        st.caption(f"🏁 Rientro previsto: {end}")
+        if route:
+            # Formattiamo l'ora per essere sicuri
+            end_time = route[-1]['arr'].strftime("%H:%M")
+        else:
+            end_time = "--:--"
+            
+        st.caption(f"🏁 Rientro previsto a Strada in Chianti: {end_time}")
         
         for i, p in enumerate(route):
             ai_lbl = "AI" if p.get('learned') else "Std"
             tel = p.get('g_data', {}).get('tel') or p.get(c_tel) or ''
             
+            # Formattazione Orario Italiana
+            ora_arrivo_str = p['arr'].strftime('%H:%M')
+            
             st.markdown(f"""
             <div class="client-card">
                 <div class="card-header">
                     <span class="client-name">{i+1}. {p[c_nom]}</span>
-                    <div class="arrival-time">{p['arr'].strftime('%H:%M')}</div>
+                    <div class="arrival-time">{ora_arrivo_str}</div>
                 </div>
                 <div class="info-row">
                     <span>📍 {p[c_ind]}, {p[c_com]}</span>
