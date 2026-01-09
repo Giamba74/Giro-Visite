@@ -21,7 +21,7 @@ st.markdown("""
     .meteo-card { padding: 15px; border-radius: 12px; color: white; margin-bottom: 25px; text-align: center; font-weight: bold; border: 1px solid rgba(255,255,255,0.2); }
     
     /* Card Cliente */
-    .client-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px; padding: 20px; margin-bottom: 15px; }
+    .client-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px; padding: 20px; margin-bottom: 5px; }
     .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
     .client-name { font-size: 1.3rem; font-weight: 700; color: #f8fafc; }
     .arrival-time { background: linear-gradient(90deg, #3b82f6, #2563eb); color: white; padding: 4px 12px; border-radius: 20px; font-weight: bold; }
@@ -59,10 +59,8 @@ ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0"
 # ==============================================================================
 
 # --- AGENTI INTELLIGENTI ---
-
 def agente_strategico(note_precedenti):
     """Analizza lo storico e dà consigli comportamentali"""
-    # CORREZIONE CRITICA: Restituisce stile neutro se vuoto, mai None
     if not note_precedenti: 
         return "ℹ️ COACH: Nessuno storico recente. Raccogli info.", "background: rgba(51, 65, 85, 0.5); border: 1px solid #64748b;"
     
@@ -172,7 +170,6 @@ if ws:
     c_cap = next((c for c in df.columns if "CAP" in c), "CAP")
     c_vis = next(c for c in df.columns if "VISITATO" in c)
     c_tel = next((c for c in df.columns if "TELEFONO" in c), "TELEFONO")
-    # NUOVA COLONNA CANVASS
     c_canv = next((c for c in df.columns if "CANVASS" in c or "PROMO" in c), None)
     
     if c_cap in df.columns: df[c_cap] = df[c_cap].astype(str).str.replace('.0','').str.zfill(5)
@@ -182,7 +179,6 @@ if ws:
         sel_zona = st.multiselect("Zona", sorted(df[c_com].unique()))
         sel_cap = st.multiselect("CAP", sorted(df[c_cap].unique()) if c_cap in df.columns else [])
         st.divider()
-        st.caption("Verifica che nel foglio esista la colonna 'CANVASS' per attivare le promo.")
 
     st.markdown("### 🚀 Brightstar AI Real-Time")
     
@@ -192,132 +188,3 @@ if ws:
     if st.button("CALCOLA GIRO (ORARIO ITALIA)", type="primary", use_container_width=True):
         mask = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
         if sel_zona: mask &= df[c_com].isin(sel_zona)
-        if sel_cap: mask &= df[c_cap].isin(sel_cap)
-        
-        raw = df[mask].to_dict('records')
-        
-        if not raw: st.warning("Nessun cliente.")
-        else:
-            with st.spinner("⏳ Analisi Traffico, Strategia e Canvass..."):
-                rotta = []
-                now = datetime.now(TZ_ITALY)
-                if now.hour >= 19 or now.hour < 6:
-                    start_t = now.replace(hour=7, minute=30, second=0)
-                    if now.hour >= 19: start_t += timedelta(days=1)
-                else: start_t = now
-                    
-                limit = start_t.replace(hour=19, minute=30)
-                curr_t = start_t
-                curr_loc = SEDE_COORDS
-                pool = raw.copy()
-
-                while pool and curr_t < limit:
-                    best = None
-                    best_score = float('inf')
-                    
-                    for p in pool:
-                        if 'g_data' not in p:
-                            p['g_data'] = get_google_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_nom]}, {p[c_com]}"])
-                            if not p['g_data']: p['g_data'] = {'coords': None, 'found': False, 'periods': []}
-
-                        if not p['g_data']['found']: continue
-
-                        dist_air = geodesic(curr_loc, p['g_data']['coords']).km
-                        est_min = (dist_air * 1.5 / 40) * 60 
-                        est_arr = curr_t + timedelta(minutes=est_min)
-                        
-                        if est_arr > limit: continue
-                        
-                        # Priorità a chi ha CANVASS attivo!
-                        score = dist_air
-                        if c_canv and p.get(c_canv) and str(p[c_canv]).strip():
-                            score -= 3 
-                            
-                        if score < best_score:
-                            best_score = score
-                            best = p
-                    
-                    if best:
-                        real_mins = get_real_travel_time(curr_loc, best['g_data']['coords'])
-                        arrival_real = curr_t + timedelta(minutes=real_mins)
-                        
-                        if arrival_real > limit:
-                            pool.remove(best)
-                            continue
-
-                        dur_visita, learned = get_ai_duration(ws_ai, best[c_nom])
-                        
-                        best['arr'] = arrival_real
-                        best['travel_time'] = real_mins
-                        best['duration'] = dur_visita
-                        best['learned'] = learned
-                        
-                        rotta.append(best)
-                        curr_t = arrival_real + timedelta(minutes=dur_visita)
-                        curr_loc = best['g_data']['coords']
-                        pool.remove(best)
-                    else: break
-                
-                st.session_state.master_route = rotta
-                st.rerun()
-
-    if 'master_route' in st.session_state:
-        route = st.session_state.master_route
-        end_time = route[-1]['arr'].strftime("%H:%M") if route else "--:--"
-        st.caption(f"🏁 Rientro previsto: {end_time}")
-        
-        for i, p in enumerate(route):
-            ai_lbl = "AI" if p.get('learned') else "Std"
-            tel = p.get('g_data', {}).get('tel') or p.get(c_tel) or ''
-            ora_str = p['arr'].strftime('%H:%M')
-            
-            # --- 1. AGENTE STRATEGICO ---
-            note_old = p.get('NOTE', '') 
-            msg_coach, style_coach = agente_strategico(note_old)
-            
-            # --- 2. AGENTE CANVASS ---
-            canvass_html = ""
-            if c_canv and p.get(c_canv):
-                txt = str(p[c_canv]).strip()
-                if txt:
-                    canvass_html = f"<div class='canvass-box'>📢 CANVASS: {txt}</div>"
-            
-            # --- 3. RENDER CARD (CORRETTO SENZA SPAZI) ---
-            html_card = f"""
-<div class="client-card">
-<div class="card-header">
-<span class="client-name">{i+1}. {p[c_nom]}</span>
-<div class="arrival-time">{ora_str}</div>
-</div>
-{canvass_html}
-<div class="strategy-box" style="{style_coach}">
-{msg_coach}
-</div>
-<div class="info-row">
-<span>📍 {p[c_ind]}, {p[c_com]}</span>
-<span class="real-traffic">🚗 Guida: {p['travel_time']} min</span>
-</div>
-<div class="info-row">
-<span class="ai-badge">⏱️ {p['duration']} min ({ai_lbl})</span>
-<span class="highlight">{tel}</span>
-</div>
-</div>
-"""
-            st.markdown(html_card, unsafe_allow_html=True)
-            
-            c1, c2, c3 = st.columns([1, 1, 1])
-            with c1:
-                coords = p['g_data']['coords']
-                lnk = f"https://www.google.com/maps/dir/?api=1&destination={coords[0]},{coords[1]}&travelmode=driving"
-                st.link_button("🚙 NAVIGA", lnk, use_container_width=True)
-            with c2:
-                if tel: st.link_button("📞 CHIAMA", f"tel:{tel}", use_container_width=True)
-            with c3:
-                if st.button("✅ FATTO", key=f"d_{i}", use_container_width=True):
-                    try:
-                        cell = ws.find(p[c_nom])
-                        ws.update_cell(cell.row, list(df.columns).index(c_vis)+1, "SI")
-                        log_visit(ws_ai, p[c_nom], p['duration'])
-                        st.session_state.master_route.pop(i)
-                        st.rerun()
-                    except: st.error("Errore DB")
