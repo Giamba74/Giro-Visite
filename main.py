@@ -15,31 +15,35 @@ API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
 
 st.markdown("""<style>
     .stApp { background-color: #001a41; }
-    .header-box { background-color: #00122e; padding: 20px; border-radius: 15px; border: 2px solid #FFD700; margin-bottom: 20px; }
+    .header-box { background-color: #00122e; padding: 20px; border-radius: 15px; border: 1px solid #FFD700; margin-bottom: 20px; }
     .tappa-card { padding: 15px; border-radius: 12px; background-color: #00122e; border-left: 8px solid #FFD700; margin-bottom: 8px; color: white; }
     .badge-open { background-color: #28a745; color: white; padding: 3px 10px; border-radius: 10px; font-size: 0.8em; font-weight: bold; }
     .badge-closed { background-color: #ff4b4b; color: white; padding: 3px 10px; border-radius: 10px; font-size: 0.8em; font-weight: bold; }
-    .error-box { background-color: #ae0000; color: white; padding: 10px; border-radius: 5px; margin-bottom: 10px; }
 </style>""", unsafe_allow_html=True)
 
-# --- 2. FUNZIONI GOOGLE LIVE ---
+# --- 2. FUNZIONI GOOGLE PLACES (Corrette per evitare 404) ---
 def get_google_live_data(nome, indirizzo, comune):
-    queries = [f"{nome} {comune} Italy", f"{indirizzo} {comune} Italy"]
-    for q in queries:
-        try:
-            search_url = f"https://maps.googleapis.com/maps/api/place/textsearch/json?query={urllib.parse.quote(q)}&key={API_KEY}"
-            res = requests.get(search_url).json()
-            if res.get('results'):
-                p_id = res['results'][0]['place_id']
-                det_url = f"https://maps.googleapis.com/maps/api/place/details/json?place_id={p_id}&fields=opening_hours,formatted_phone_number,geometry&key={API_KEY}"
-                det = requests.get(det_url).json().get('result', {})
+    # Usiamo l'endpoint ufficiale Places Text Search
+    q = f"{nome} {comune} Italy"
+    try:
+        search_url = f"https://maps.googleapis.com/maps/api/place/textsearch/json?query={urllib.parse.quote(q)}&key={API_KEY}"
+        res = requests.get(search_url).json()
+        
+        if res.get('status') == 'OK' and res.get('results'):
+            p_id = res['results'][0]['place_id']
+            # Chiamata Place Details ufficiale
+            det_url = f"https://maps.googleapis.com/maps/api/place/details/json?place_id={p_id}&fields=opening_hours,formatted_phone_number,geometry&key={API_KEY}"
+            det_res = requests.get(det_url).json()
+            
+            if det_res.get('status') == 'OK':
+                det = det_res.get('result', {})
                 return {
                     "coords": (det['geometry']['location']['lat'], det['geometry']['location']['lng']),
                     "periods": det.get('opening_hours', {}).get('periods', []),
                     "tel": det.get('formatted_phone_number', '')
                 }
-        except:
-            continue
+    except Exception as e:
+        st.error(f"Errore chiamata API Google: {e}")
     return None
 
 def is_open_check(ora_str, periods):
@@ -54,10 +58,9 @@ def is_open_check(ora_str, periods):
     return False
 
 # --- 3. LOGICA PRINCIPALE ---
-st.title("⭐ BRIGHTSTAR GOOGLE AI - FULL FILTERS")
+st.title("⭐ BRIGHTSTAR GOOGLE AI")
 
-# --- INSERISCI L'ID DEL TUO FOGLIO QUI ---
-ID_FOGLIO = "IL_TUO_ID_FOGLIO" 
+ID_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" # <--- METTI IL TUO ID QUI
 
 @st.cache_resource
 def init_gs():
@@ -66,7 +69,7 @@ def init_gs():
                                                     scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
         return gspread.authorize(creds)
     except Exception as e:
-        st.error(f"Errore inizializzazione Google Sheets: {e}")
+        st.error(f"Errore Google Sheets: {e}")
         return None
 
 gc = init_gs()
@@ -77,7 +80,6 @@ if gc:
         data = ws.get_all_values()
         df = pd.DataFrame(data[1:], columns=[h.upper() for h in data[0]])
         
-        # Correzione CAP (Parentesi aggiunte correttamente)
         if 'CAP' in df.columns:
             df['CAP'] = df['CAP'].astype(str).str.replace('.0', '', regex=False).str.strip()
 
@@ -85,9 +87,9 @@ if gc:
             st.markdown("<div class='header-box'>", unsafe_allow_html=True)
             col1, col2 = st.columns(2)
             with col1:
-                sel_comuni = st.multiselect("📍 Filtra per Comune:", sorted(df['COMUNE'].unique().tolist()))
+                sel_comuni = st.multiselect("📍 Comune:", sorted(df['COMUNE'].unique().tolist()))
             with col2:
-                sel_caps = st.multiselect("📮 Filtra per CAP:", sorted(df['CAP'].unique().tolist()))
+                sel_caps = st.multiselect("📮 CAP:", sorted(df['CAP'].unique().tolist()))
             
             mask = pd.Series([True] * len(df))
             if sel_comuni: mask &= df['COMUNE'].isin(sel_comuni)
@@ -95,68 +97,57 @@ if gc:
             mask &= ~df['VISITATO'].str.contains('SI|SÌ', case=False, na=False)
             
             df_filtrato = df[mask]
-            sel_clienti = st.multiselect("🎯 Scegli i clienti per il giro:", df_filtrato['CLIENTE'].tolist())
+            sel_clienti = st.multiselect("🎯 Scegli clienti:", df_filtrato['CLIENTE'].tolist())
             
-            if st.button("🚀 GENERA GIRO OTTIMIZZATO (LIVE)"):
+            if st.button("🚀 GENERA GIRO"):
                 if not API_KEY:
-                    st.error("❌ Errore: Manca la GOOGLE_MAPS_API_KEY nei Secrets!")
-                elif not sel_clienti:
-                    st.warning("⚠️ Seleziona almeno un cliente.")
+                    st.error("Manca la GOOGLE_MAPS_API_KEY nei Secrets!")
                 else:
-                    with st.spinner("Analisi Google Maps in corso..."):
-                        giro_calcolato = []
-                        punto_att = SEDE
-                        ora_att = datetime.now().replace(hour=7, minute=30, second=0)
+                    giro_calcolato = []
+                    punto_att = SEDE
+                    ora_att = datetime.now().replace(hour=7, minute=30, second=0)
+                    
+                    for nome in sel_clienti:
+                        riga = df[df['CLIENTE']==nome].iloc[0]
+                        info = get_google_live_data(nome, riga['INDIRIZZO'], riga['COMUNE'])
                         
-                        for nome in sel_clienti:
-                            riga = df[df['CLIENTE']==nome].iloc[0]
-                            info = get_google_live_data(nome, riga['INDIRIZZO'], riga['COMUNE'])
+                        if info:
+                            dist = geodesic(punto_att, info['coords']).km
+                            ora_arrivo = ora_att + timedelta(minutes=(dist/35)*60)
+                            ora_str = ora_arrivo.strftime("%H:%M")
                             
-                            if info:
-                                dist = geodesic(punto_att, info['coords']).km
-                                ora_arrivo = ora_att + timedelta(minutes=(dist/35)*60)
-                                ora_str = ora_arrivo.strftime("%H:%M")
-                                
-                                giro_calcolato.append({
-                                    "NOME": nome,
-                                    "ORA": ora_str,
-                                    "APERTO": is_open_check(ora_str, info['periods']),
-                                    "TEL": info['tel'],
-                                    "COORDS": info['coords'],
-                                    "COMUNE": riga['COMUNE']
-                                })
-                                ora_att = ora_arrivo + timedelta(minutes=30)
-                                punto_att = info['coords']
-                            else:
-                                st.markdown(f"<div class='error-box'>❓ Google Maps non trova: {nome}</div>", unsafe_allow_html=True)
-                        
-                        if giro_calcolato:
-                            st.session_state.giro_live = giro_calcolato
-                            dist_r = geodesic(punto_att, SEDE).km
-                            st.session_state.rientro_goog = (ora_att + timedelta(minutes=(dist_r/35)*60)).strftime("%H:%M")
-                            st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
+                            giro_calcolato.append({
+                                "NOME": nome, "ORA": ora_str,
+                                "APERTO": is_open_check(ora_str, info['periods']),
+                                "TEL": info['tel'], "COORDS": info['coords'],
+                                "COMUNE": riga['COMUNE']
+                            })
+                            ora_att = ora_arrivo + timedelta(minutes=30)
+                            punto_att = info['coords']
+                    
+                    st.session_state.giro_live = giro_calcolato
+                    st.session_state.rientro_goog = (ora_att + timedelta(minutes=(geodesic(punto_att, SEDE).km/35)*60)).strftime("%H:%M")
+                    st.rerun()
 
         if 'giro_live' in st.session_state and st.session_state.giro_live:
-            st.info(f"🏁 Rientro previsto a Strada in Chianti: **{st.session_state.rientro_goog}**")
+            st.info(f"🏁 Rientro: **{st.session_state.rientro_goog}**")
             for i, p in enumerate(st.session_state.giro_live):
                 badge = '<span class="badge-open">APERTO ✅</span>' if p['APERTO'] else '<span class="badge-closed">CHIUSO ❌</span>'
                 st.markdown(f"""<div class="tappa-card">
-                    <div style="display:flex; justify-content:space-between">
-                        <b>{i+1}. {p['NOME']}</b> {badge}
-                    </div>
-                    📍 {p['COMUNE']} | Arrivo: <b>{p['ORA']}</b><br>
-                    📞 {p['TEL']}
+                    <b>{i+1}. {p['NOME']}</b> {badge}<br>
+                    📍 {p['COMUNE']} | Arrivo: {p['ORA']} | 📞 {p['TEL']}
                 </div>""", unsafe_allow_html=True)
                 
                 c1, c2 = st.columns(2)
-                with c1: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={p['COORDS'][0]},{p['COORDS'][1]}&travelmode=driving")
+                with c1:
+                    # LINK NAVIGAZIONE UFFICIALE
+                    url_nav = f"https://www.google.com/maps/dir/?api=1&destination={p['COORDS'][0]},{p['COORDS'][1]}&travelmode=driving"
+                    st.link_button("🚙 NAVIGA", url_nav)
                 with c2:
-                    if st.button(f"✅ FATTO", key=f"btn_live_{i}"):
-                        r_goog = ws.find(p['NOME'])
-                        ws.update_cell(r_goog.row, list(df.columns).index("VISITATO")+1, "SI")
+                    if st.button("✅ FATTO", key=f"btn_{i}"):
+                        r = ws.find(p['NOME'])
+                        ws.update_cell(r.row, list(df.columns).index("VISITATO")+1, "SI")
                         st.session_state.giro_live.pop(i)
                         st.rerun()
-
     except Exception as e:
-        st.error(f"Errore generale: {e}")
+        st.error(f"Errore: {e}")
