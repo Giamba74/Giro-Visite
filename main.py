@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from geopy.distance import geodesic
 from datetime import datetime, timedelta
 import urllib.parse
@@ -17,12 +18,11 @@ st.markdown("""
     .stApp { background-color: #001a41; }
     .header-box { background-color: #00122e; padding: 20px; border-radius: 15px; border: 2px solid #FFD700; margin-bottom: 20px; }
     .tappa-card { padding: 15px; border-radius: 12px; background-color: #00122e; border-left: 8px solid #FFD700; margin-bottom: 8px; color: white; }
-    .badge-open { background-color: #28a745; color: white; padding: 3px 10px; border-radius: 10px; font-size: 0.8em; }
     .time-badge { background-color: #FFD700; color: #001a41; padding: 2px 8px; border-radius: 5px; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. AGENTI INTELLIGENTI ---
+# --- 2. FUNZIONI ---
 def agente_meteo(lat, lon):
     try:
         res = requests.get(f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation_probability&timezone=Europe%2FRome&forecast_days=1").json()
@@ -35,22 +35,19 @@ def agente_meteo(lat, lon):
 
 def get_google_data(nome, indirizzo, comune):
     if not API_KEY: return None
-    q = f"{nome} {indirizzo} {comune} Italy"
+    query = f"{nome} {indirizzo} {comune} Italy"
     try:
-        url = f"https://maps.googleapis.com/maps/api/place/textsearch/json?query={urllib.parse.quote(q)}&key={API_KEY}"
+        url = f"https://maps.googleapis.com/maps/api/place/textsearch/json?query={urllib.parse.quote(query)}&key={API_KEY}"
         res = requests.get(url).json()
         if res.get('status') == 'OK' and res.get('results'):
-            p_id = res['results'][0]['place_id']
-            det_url = f"https://maps.googleapis.com/maps/api/place/details/json?place_id={p_id}&fields=opening_hours,formatted_phone_number,geometry&key={API_KEY}"
-            det = requests.get(det_url).json().get('result', {})
+            res0 = res['results'][0]
             return {
-                "coords": (det['geometry']['location']['lat'], det['geometry']['location']['lng']),
-                "periods": det.get('opening_hours', {}).get('periods', []),
-                "tel": det.get('formatted_phone_number', '')
+                "coords": (res0['geometry']['location']['lat'], res0['geometry']['location']['lng']),
+                "tel": res0.get('formatted_phone_number', '')
             }
     except: return None
 
-# --- 3. LOGICA DI SELEZIONE E OTTIMIZZAZIONE ---
+# --- 3. LOGICA DI CALCOLO ---
 ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
 
 @st.cache_resource
@@ -68,7 +65,10 @@ if ws:
     data = ws.get_all_values()
     df = pd.DataFrame(data[1:], columns=[h.strip().upper() for h in data[0]])
     
-    # Rilevamento automatico colonne
+    # Pulizia CAP per Firenze e simili
+    c_cap = next((c for c in df.columns if "CAP" in c), "CAP")
+    df[c_cap] = df[c_cap].astype(str).str.replace('.0', '', regex=False).str.pad(5, fillchar='0')
+    
     c_cliente = next((c for c in df.columns if "CLIENTE" in c), "CLIENTE")
     c_indirizzo = next((c for c in df.columns if "INDIRIZZO" in c or "VIA" in c), "INDIRIZZO")
     c_comune = next((c for c in df.columns if "COMUNE" in c), "COMUNE")
@@ -76,72 +76,61 @@ if ws:
     c_tel = next((c for c in df.columns if "TELEFONO" in c), "TELEFONO")
     c_visitato = next((c for c in df.columns if "VISITATO" in c), "VISITATO")
 
-    # Meteo Alert
     mezzo, consiglio, colore = agente_meteo(43.66, 11.30)
     st.markdown(f"<div style='background-color:{colore}; color:white; padding:10px; border-radius:10px; text-align:center; font-weight:bold;'>{mezzo}: {consiglio}</div>", unsafe_allow_html=True)
 
     with st.container():
         st.markdown("<div class='header-box'>", unsafe_allow_html=True)
-        col_f1, col_f2 = st.columns(2)
-        with col_f1: sel_comuni = st.multiselect("📍 Zona (Comuni):", sorted(df[c_comune].unique().tolist()))
-        with col_f2: tappe_max = st.slider("Numero visite oggi:", 5, 15, 10)
+        col1, col2, col3 = st.columns(3)
+        with col1: sel_comuni = st.multiselect("📍 Comuni:", sorted(df[c_comune].unique().tolist()))
+        with col2: sel_caps = st.multiselect("📮 CAP (es. Firenze):", sorted(df[c_cap].unique().tolist()))
+        with col3: tappe_max = st.slider("Numero visite:", 5, 20, 10)
         
-        if st.button("🚀 CALCOLA GIRO OTTIMIZZATO (DA CASA ORE 07:30)"):
-            # 1. Filtro i non visitati della zona scelta
+        if st.button("🚀 GENERA GIRO OTTIMIZZATO"):
             mask = ~df[c_visitato].str.contains('SI|SÌ', case=False, na=False)
             if sel_comuni: mask &= df[c_comune].isin(sel_comuni)
+            if sel_caps: mask &= df[c_cap].isin(sel_caps)
+            
             potenziali = df[mask].to_dict('records')
 
             if not potenziali:
-                st.warning("Nessun cliente da visitare trovato in questa zona!")
+                st.warning("Nessun cliente trovato con questi filtri!")
             else:
-                with st.spinner("L'intelligenza artificiale sta calcolando il percorso migliore..."):
-                    giro_finale = []
-                    punto_attuale = SEDE_COORDS
-                    ora_attuale = datetime.now().replace(hour=7, minute=30, second=0)
+                with st.spinner("Calcolo rotta zonale in corso..."):
+                    for p in potenziali:
+                        g_data = get_google_data(p[c_cliente], p[c_indirizzo], p[c_comune])
+                        p['coords'] = g_data['coords'] if g_data else SEDE_COORDS
+                        p['g_tel'] = g_data['tel'] if g_data else p.get(c_tel, '')
+                        # Calcolo angolo rispetto alla sede per raggruppare geograficamente
+                        p['angle'] = np.arctan2(p['coords'][0] - SEDE_COORDS[0], p['coords'][1] - SEDE_COORDS[1])
+                        p['dist_da_casa'] = geodesic(SEDE_COORDS, p['coords']).km
+
+                    # --- ALGORITMO DI ORDINAMENTO A ZONA ---
+                    # Ordiniamo prima per Comune, poi per CAP, poi per Angolo
+                    df_opt = pd.DataFrame(potenziali)
+                    df_opt = df_opt.sort_values(by=[c_comune, c_cap, 'angle', 'dist_da_casa'])
                     
-                    # 2. Algoritmo "Best Path" (Vicino più prossimo)
-                    while potenziali and len(giro_finale) < tappe_max:
-                        # Recupero dati Google per i potenziali (o fallback su sede se errore)
-                        for p in potenziali:
-                            if 'coords' not in p:
-                                g_data = get_google_data(p[c_cliente], p[c_indirizzo], p[c_comune])
-                                p['coords'] = g_data['coords'] if g_data else SEDE_COORDS
-                                p['g_tel'] = g_data['tel'] if g_data else p.get(c_tel, '')
-                                p['periods'] = g_data['periods'] if g_data else []
-
-                        # Trovo il più vicino alla mia posizione attuale
-                        migliore = min(potenziali, key=lambda x: geodesic(punto_attuale, x['coords']).km)
+                    giro_final = []
+                    punto_att = SEDE_COORDS
+                    ora_att = datetime.now().replace(hour=7, minute=30, second=0)
+                    
+                    for _, r in df_opt.head(tappe_max).iterrows():
+                        dist = geodesic(punto_att, r['coords']).km
+                        ora_arrivo = ora_att + timedelta(minutes=(dist/35)*60) # 35km/h media
                         
-                        distanza = geodesic(punto_attuale, migliore['coords']).km
-                        # Calcolo tempo (40km/h media per traffico)
-                        tempo_viaggio = (distanza / 40) * 60
-                        ora_arrivo = ora_attuale + timedelta(minutes=tempo_viaggio)
-                        
-                        giro_finale.append({
-                            "NOME": migliore[c_cliente],
-                            "COD": migliore[c_codice],
-                            "ORA": ora_arrivo.strftime("%H:%M"),
-                            "TEL": migliore['g_tel'],
-                            "COORDS": migliore['coords'],
-                            "COMUNE": migliore[c_comune]
+                        giro_final.append({
+                            "NOME": r[c_cliente], "COD": r[c_codice], "ORA": ora_arrivo.strftime("%H:%M"),
+                            "TEL": r['g_tel'], "COORDS": r['coords'], "COMUNE": r[c_comune], "CAP": r[c_cap]
                         })
-                        
-                        # Aggiorno per la tappa successiva: 30 min visita + 5 min margine
-                        ora_attuale = ora_arrivo + timedelta(minutes=35)
-                        punto_attuale = migliore['coords']
-                        potenziali.remove(migliore)
+                        ora_att = ora_arrivo + timedelta(minutes=35) # 30 min visita + 5 spostamento
+                        punto_att = r['coords']
 
-                    st.session_state.giro_igt = giro_finale
-                    # Calcolo rientro a casa
-                    rientro_km = geodesic(punto_attuale, SEDE_COORDS).km
-                    st.session_state.rientro = (ora_attuale + timedelta(minutes=(rientro_km/40)*60)).strftime("%H:%M")
+                    st.session_state.giro_igt = giro_final
+                    st.session_state.rientro = (ora_att + timedelta(minutes=(geodesic(punto_att, SEDE_COORDS).km/35)*60)).strftime("%H:%M")
                     st.rerun()
 
-    # --- VISUALIZZAZIONE RISULTATI ---
-    if 'giro_igt' in st.session_state and st.session_state.giro_igt:
-        st.info(f"🏁 Rientro stimato a Strada in Chianti: **{st.session_state.rientro}**")
-        
+    if 'giro_igt' in st.session_state:
+        st.info(f"🏁 Rientro a Strada in Chianti: **{st.session_state.rientro}**")
         for i, p in enumerate(st.session_state.giro_igt):
             st.markdown(f"""
             <div class="tappa-card">
@@ -149,7 +138,7 @@ if ws:
                     <b>{i+1}. {p['NOME']}</b>
                     <span class="time-badge">{p['ORA']}</span>
                 </div>
-                <small>Codice: {p['COD']} | 📍 {p['COMUNE']}</small>
+                <small>Cod: {p['COD']} | 📍 {p['CAP']} {p['COMUNE']}</small>
             </div>
             """, unsafe_allow_html=True)
             
