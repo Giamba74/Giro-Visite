@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 from datetime import datetime, timedelta
@@ -44,7 +43,7 @@ def agente_meteo(lat, lon):
 # --- 3. LOGICA DI CALCOLO ---
 st.title("⭐ BRIGHTSTAR PRO NAVIGATOR")
 
-ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
+ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0I" 
 ws = get_gsheet_ws(ID_DEL_FOGLIO)
 
 if ws:
@@ -69,8 +68,9 @@ if ws:
             
             num_tappe = st.slider("Quante visite vuoi pianificare?", 5, 20, 10)
             
-            if st.button("🚀 OTTIMIZZA PERCORSO E ORARI"):
-                with st.spinner("Calcolo percorso intelligente..."):
+            if st.button("🚀 GENERA GIRO OTTIMIZZATO"):
+                with st.spinner("Organizzando le tappe per zona..."):
+                    # 1. Selezione Clienti
                     giro = df[df['CLIENTE'].isin(forzati)].to_dict('records')
                     mask = df['CLIENTE'].isin(df_liberi['CLIENTE']) & ~df['CLIENTE'].isin(forzati)
                     if sel_comuni: mask &= df['COMUNE'].isin(sel_comuni)
@@ -79,41 +79,46 @@ if ws:
                     extra = df[mask].head(num_tappe - len(giro)).to_dict('records')
                     giro.extend(extra)
                     
-                    geo = Nominatim(user_agent="brightstar_v11")
+                    # 2. Geocoding
+                    geo = Nominatim(user_agent="brightstar_v12")
                     for r in giro:
                         try:
                             loc = geo.geocode(f"{r['INDIRIZZO']}, {r['CAP']}, {r['COMUNE']}, Italy", timeout=3)
-                            if loc:
-                                r['lat'], r['lon'] = loc.latitude, loc.longitude
-                                # Calcolo angolo rispetto alla sede per raggruppare le zone
-                                r['angle'] = np.arctan2(loc.latitude - SEDE[0], loc.longitude - SEDE[1])
-                                r['coords'] = (loc.latitude, loc.longitude)
-                            else:
-                                r['coords'], r['angle'] = SEDE, 0
-                        except: r['coords'], r['angle'] = SEDE, 0
+                            r['coords'] = (loc.latitude, loc.longitude) if loc else SEDE
+                        except: r['coords'] = SEDE
 
-                    # ORDINAMENTO GEOGRAFICO (Evita i rimbalzi Arezzo-Bibbiena)
-                    # Ordiniamo prima per angolo (zona) e poi per distanza
-                    giro.sort(key=lambda x: (x.get('angle', 0), geodesic(SEDE, x['coords']).km))
+                    # 3. ORDINAMENTO BLINDATO PER COMUNE (Evita rimbalzi Arezzo-Bibbiena)
+                    # Prima raggruppiamo per comune, così finisci Arezzo prima di andare a Bibbiena
+                    df_giro = pd.DataFrame(giro)
+                    
+                    # Calcoliamo la distanza media di ogni comune dalla sede
+                    comuni_dist = {}
+                    for comune in df_giro['COMUNE'].unique():
+                        coords_comune = df_giro[df_giro['COMUNE'] == comune]['coords'].tolist()
+                        dist_media = sum(geodesic(SEDE, c).km for c in coords_comune) / len(coords_comune)
+                        comuni_dist[comune] = dist_media
+                    
+                    # Ordiniamo i comuni dal più vicino al più lontano (o viceversa per logica di rientro)
+                    df_giro['ORDINE_COMUNE'] = df_giro['COMUNE'].map(comuni_dist)
+                    df_giro = df_giro.sort_values(by=['ORDINE_COMUNE', 'COMUNE'])
+                    
+                    giro_ordinato = df_giro.to_dict('records')
 
+                    # 4. Calcolo Orari
                     opt = []
                     punto_precedente = SEDE
                     ora_attuale = datetime.now().replace(hour=7, minute=30, second=0, microsecond=0)
                     
-                    for prox in giro:
+                    for prox in giro_ordinato:
                         dist = geodesic(punto_precedente, prox['coords']).km
-                        # Velocità 35km/h per gestire traffico e auto
-                        tempo_viaggio = (dist / 35) * 60 
+                        tempo_viaggio = (dist / 35) * 60 # 35 km/h media
                         ora_attuale += timedelta(minutes=tempo_viaggio)
                         prox['ora_arrivo'] = ora_attuale.strftime("%H:%M")
-                        
-                        ora_attuale += timedelta(minutes=30) # Sosta fissa
+                        ora_attuale += timedelta(minutes=30) # Sosta 30 min
                         prox['ora_partenza'] = ora_attuale.strftime("%H:%M")
-                        
                         opt.append(prox)
                         punto_precedente = prox['coords']
                     
-                    # Rientro finale a Strada in Chianti
                     dist_rientro = geodesic(punto_precedente, SEDE).km
                     ora_attuale += timedelta(minutes=(dist_rientro/35)*60)
                     
@@ -127,18 +132,18 @@ if ws:
             
             rientro_dt = datetime.strptime(st.session_state.rientro, "%H:%M")
             if rientro_dt.hour < 18:
-                st.warning("⚠️ Finirai molto presto! Aggiungi tappe per ottimizzare la giornata.")
+                st.warning("⚠️ Finirai molto presto! Aggiungi tappe (slider sopra) per riempire la giornata.")
             elif rientro_dt.hour >= 19 and rientro_dt.minute > 30:
-                st.error("🚨 Attenzione: Superamento orario 19:30!")
+                st.error("🚨 Attenzione: Il rientro previsto supera le 19:30!")
 
             for i, p in enumerate(st.session_state.giro_igt):
                 with st.container():
                     st.markdown(f"""
                     <div class="tappa-card">
-                        <span class="time-badge">Arrivo stimato: {p['ora_arrivo']}</span><br>
+                        <span class="time-badge">Arrivo: {p['ora_arrivo']}</span><br>
                         <b>{i+1}. {p['CLIENTE']}</b> (Cod: {p.get('CODICE','')})<br>
                         📍 {p.get('CAP','')} {p.get('COMUNE','')} - {p.get('INDIRIZZO','')}<br>
-                        ⏱️ Sosta di 30 min fino alle {p['ora_partenza']}
+                        ⏱️ Sosta di 30m fino alle {p['ora_partenza']}
                     </div>
                     """, unsafe_allow_html=True)
                     
