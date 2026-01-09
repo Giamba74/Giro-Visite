@@ -188,3 +188,121 @@ if ws:
     if st.button("CALCOLA GIRO (ORARIO ITALIA)", type="primary", use_container_width=True):
         mask = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
         if sel_zona: mask &= df[c_com].isin(sel_zona)
+
+# --- DIAGNOSTICA AVANZATA ---
+    if st.button("CALCOLA GIRO (MODALITÀ DIAGNOSI)", type="primary", use_container_width=True):
+        st.write("--- INIZIO DIAGNOSI ---")
+        
+        # 1. CONTROLLO COLONNE RILEVATE
+        st.write(f"🧐 **Colonne Rilevate:** Cliente='{c_nom}', Indirizzo='{c_ind}', Comune='{c_com}', Visitato='{c_vis}'")
+        
+        # 2. CONTROLLO FILTRI
+        mask = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
+        righe_non_visitate = len(df[mask])
+        st.write(f"📊 Clienti totali nel foglio: {len(df)}")
+        st.write(f"❌ Clienti NON visitati: {righe_non_visitate} (Se è 0, controlla la colonna VISITATO)")
+
+        if sel_zona: 
+            mask &= df[c_com].isin(sel_zona)
+            st.write(f"📍 Dopo filtro Zona ({sel_zona}): rimasti {len(df[mask])} clienti")
+        
+        if sel_cap: 
+            mask &= df[c_cap].isin(sel_cap)
+            st.write(f"📮 Dopo filtro CAP: rimasti {len(df[mask])} clienti")
+            
+        raw = df[mask].to_dict('records')
+        
+        if not raw:
+            st.error("⛔ STOP: Nessun cliente rimasto dopo i filtri! Controlla i nomi dei Comuni nel foglio.")
+        else:
+            st.success(f"✅ Trovati {len(raw)} clienti potenziali. Inizio interrogazione Google Maps...")
+            
+            with st.spinner("⏳ Analisi Traffico, Strategia e Canvass..."):
+                rotta = []
+                now = datetime.now(TZ_ITALY)
+                if now.hour >= 19 or now.hour < 6:
+                    start_t = now.replace(hour=7, minute=30, second=0)
+                    if now.hour >= 19: start_t += timedelta(days=1)
+                    st.info(f"🌙 Orario serale/notturno. Pianifico per domani mattina: {start_t.strftime('%H:%M')}")
+                else: 
+                    start_t = now
+                    st.info(f"☀️ Pianifico partendo da ADESSO: {start_t.strftime('%H:%M')}")
+                    
+                limit = start_t.replace(hour=19, minute=30)
+                curr_t = start_t
+                curr_loc = SEDE_COORDS
+                pool = raw.copy()
+
+                clienti_processati = 0
+                clienti_con_gps = 0
+
+                while pool and curr_t < limit:
+                    best = None
+                    best_score = float('inf')
+                    
+                    for p in pool:
+                        if 'g_data' not in p:
+                            clienti_processati += 1
+                            # Debug specifico Google
+                            q_list = [f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_nom]}, {p[c_com]}"]
+                            p['g_data'] = get_google_data(q_list)
+                            
+                            if not p['g_data']: 
+                                st.warning(f"⚠️ Google non trova: {p[c_nom]} ({p[c_ind]})")
+                                p['g_data'] = {'coords': None, 'found': False, 'periods': []}
+                            else:
+                                if not p.get('gps_logged'): # Evita spam
+                                    clienti_con_gps += 1
+                                    p['gps_logged'] = True
+
+                        if not p['g_data']['found']: continue
+
+                        dist_air = geodesic(curr_loc, p['g_data']['coords']).km
+                        est_min = (dist_air * 1.5 / 40) * 60 
+                        est_arr = curr_t + timedelta(minutes=est_min)
+                        
+                        if est_arr > limit: continue
+                        
+                        score = dist_air
+                        if c_canv and p.get(c_canv) and str(p[c_canv]).strip():
+                            score -= 3 
+                        if score < best_score:
+                            best_score = score
+                            best = p
+                    
+                    if best:
+                        real_mins = get_real_travel_time(curr_loc, best['g_data']['coords'])
+                        arrival_real = curr_t + timedelta(minutes=real_mins)
+                        
+                        if arrival_real > limit:
+                            st.write(f"⏰ {best[c_nom]} scartato: arrivo previsto {arrival_real.strftime('%H:%M')} (oltre 19:30)")
+                            pool.remove(best)
+                            continue
+
+                        dur_visita, learned = get_ai_duration(ws_ai, best[c_nom])
+                        best['arr'] = arrival_real
+                        best['travel_time'] = real_mins
+                        best['duration'] = dur_visita
+                        best['learned'] = learned
+                        
+                        rotta.append(best)
+                        curr_t = arrival_real + timedelta(minutes=dur_visita)
+                        curr_loc = best['g_data']['coords']
+                        pool.remove(best)
+                    else: 
+                        break
+                
+                st.write(f"🏁 Elaborazione finita. GPS Trovati: {clienti_con_gps}/{len(raw)}")
+                
+                if not rotta:
+                    st.error("⛔ Nessuna rotta calcolata. Possibili cause: Indirizzi sbagliati o Orario > 19:30.")
+                
+                st.session_state.master_route = rotta
+                st.rerun()
+
+    # --- (Il resto del codice per visualizzare le carte rimane uguale) ---
+    if 'master_route' in st.session_state and st.session_state.master_route:
+        # ... (Qui c'è il codice che mostra le schede clienti che hai già) ...
+        # Assicurati di non cancellare la parte che disegna le carte!
+        # Se l'hai cancellata per sbaglio, rimettila dal codice precedente.
+
