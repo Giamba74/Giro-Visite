@@ -11,8 +11,8 @@ from google.oauth2.service_account import Credentials
 # --- 1. CONFIGURAZIONE ---
 st.set_page_config(page_title="Brightstar Google AI Pro", page_icon="⭐", layout="wide")
 SEDE = (43.661888, 11.305728) # Strada in Chianti
-API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
-
+# Prova a cercare la chiave in modi diversi
+API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY") or st.secrets.get("google_maps_api_key")
 st.markdown("""<style>
     .stApp { background-color: #001a41; }
     .header-box { background-color: #00122e; padding: 20px; border-radius: 15px; border: 1px solid #FFD700; margin-bottom: 20px; }
@@ -151,3 +151,4 @@ if gc:
                         st.rerun()
     except Exception as e:
         st.error(f"Errore: {e}")
+
