@@ -7,19 +7,18 @@ import requests
 import gspread
 from google.oauth2.service_account import Credentials
 
-# --- 1. CONFIGURAZIONE PAGINA ---
-st.set_page_config(page_title="Brightstar Google AI Pro", page_icon="⭐", layout="wide")
+# --- 1. CONFIGURAZIONE ---
+st.set_page_config(page_title="Brightstar Pro Navigator", page_icon="⭐", layout="wide")
 SEDE = (43.661888, 11.305728) # Strada in Chianti
 API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
 
 st.markdown("""
     <style>
     .stApp { background-color: #001a41; }
-    .header-box { background-color: #00122e; padding: 20px; border-radius: 15px; border: 1px solid #FFD700; margin-bottom: 25px; }
+    .header-box { background-color: #00122e; padding: 20px; border-radius: 15px; border: 2px solid #FFD700; margin-bottom: 25px; }
     .tappa-card { padding: 15px; border-radius: 12px; background-color: #00122e; border-left: 8px solid #FFD700; margin-bottom: 8px; color: white; }
     .badge-open { background-color: #28a745; color: white; padding: 3px 10px; border-radius: 10px; font-size: 0.8em; font-weight: bold; }
     .badge-closed { background-color: #ff4b4b; color: white; padding: 3px 10px; border-radius: 10px; font-size: 0.8em; font-weight: bold; }
-    .info-text { color: #FFD700; font-size: 0.9em; margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -53,10 +52,10 @@ def is_open_check(ora_str, periods):
             if apre <= ora_int <= chiude: return True
     return False
 
-# --- 3. LOGICA PRINCIPALE ---
-st.title("⭐ BRIGHTSTAR - GIRO AUTOMATICO")
+# --- 3. CONNESSIONE E LOGICA ---
+st.title("⭐ BRIGHTSTAR - NAVIGATORE AUTOMATICO")
 
-# ID DEL FOGLIO (Assicurati che sia corretto)
+# --- INSERISCI QUI IL TUO ID ---
 ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
 
 @st.cache_resource
@@ -67,7 +66,7 @@ def init_gsheet(sheet_id):
         client = gspread.authorize(creds)
         return client.open_by_key(sheet_id).get_worksheet(0)
     except Exception as e:
-        st.error(f"Errore database: {e}")
+        st.error(f"Errore: {e}")
         return None
 
 ws = init_gsheet(ID_DEL_FOGLIO)
@@ -80,70 +79,54 @@ if ws:
 
     with st.container():
         st.markdown("<div class='header-box'>", unsafe_allow_html=True)
-        col1, col2 = st.columns(2)
-        with col1:
-            sel_comuni = st.multiselect("📍 Scegli Comuni:", sorted(df['COMUNE'].unique().tolist()))
-        with col2:
-            sel_caps = st.multiselect("📮 Scegli CAP:", sorted(df['CAP'].unique().tolist()))
+        c1, c2 = st.columns(2)
+        with c1: sel_comuni = st.multiselect("📍 Scegli Comune:", sorted(df['COMUNE'].unique().tolist()))
+        with c2: sel_caps = st.multiselect("📮 Scegli CAP:", sorted(df['CAP'].unique().tolist()))
         
-        # Filtro automatico
         mask = pd.Series([True] * len(df))
         if sel_comuni: mask &= df['COMUNE'].isin(sel_comuni)
         if sel_caps: mask &= df['CAP'].isin(sel_caps)
         mask &= ~df['VISITATO'].str.contains('SI|SÌ', case=False, na=False)
         
         df_filtrato = df[mask]
-        lista_nomi_filtrati = df_filtrato['CLIENTE'].tolist()
+        lista_clienti = df_filtrato['CLIENTE'].tolist()
 
-        # SELEZIONE AUTOMATICA: Se c'è un filtro attivo, seleziona tutti i clienti di default
-        sel_clienti = st.multiselect(
-            f"🎯 Clienti individuati ({len(lista_nomi_filtrati)}):", 
-            lista_nomi_filtrati, 
-            default=lista_nomi_filtrati
-        )
+        # Selezione automatica di tutti i clienti filtrati
+        sel_clienti = st.multiselect("🎯 Clienti nel giro:", lista_clienti, default=lista_clienti)
         
-        st.markdown(f"<div class='info-text'>Verranno calcolate {len(sel_clienti)} tappe.</div>", unsafe_allow_html=True)
-
-        if st.button("🚀 GENERA IL MIGLIOR GIRO ORA"):
+        if st.button("🚀 GENERA IL MIGLIOR PERCORSO"):
             if not sel_clienti:
-                st.warning("Filtra un Comune o un CAP per vedere i clienti!")
+                st.warning("Filtra una zona per iniziare!")
             else:
-                with st.spinner("L'intelligenza Google sta ottimizzando il tuo percorso..."):
+                with st.spinner("Ottimizzazione con Google Maps..."):
                     giro_ris = []
                     punto_att = SEDE
-                    ora_att = datetime.now().replace(hour=8, minute=0, second=0) # Partenza ore 8:00
+                    ora_att = datetime.now().replace(hour=8, minute=0, second=0)
                     
                     for nome in sel_clienti:
                         riga = df[df['CLIENTE'] == nome].iloc[0]
                         info = get_google_live_data(nome, riga['INDIRIZZO'], riga['COMUNE'])
-                        
-                        if info:
-                            coords, periods, tel = info['coords'], info['periods'], info['tel']
-                        else:
-                            coords, periods, tel = SEDE, [], riga.get('TELEFONO', '')
+                        coords = info['coords'] if info else SEDE
+                        periods = info['periods'] if info else []
+                        tel = info['tel'] if info else riga.get('TELEFONO', '')
 
                         dist = geodesic(punto_att, coords).km
                         ora_arrivo = ora_att + timedelta(minutes=(dist/35)*60)
-                        ora_str = ora_arrivo.strftime("%H:%M")
                         
                         giro_ris.append({
-                            "NOME": nome, "ORA": ora_str,
-                            "APERTO": is_open_check(ora_str, periods),
+                            "NOME": nome, "ORA": ora_arrivo.strftime("%H:%M"),
+                            "APERTO": is_open_check(ora_arrivo.strftime("%H:%M"), periods),
                             "TEL": tel, "COORDS": coords, "COMUNE": riga['COMUNE']
                         })
-                        ora_att = ora_arrivo + timedelta(minutes=30)
+                        ora_att = ora_arrivo + timedelta(minutes=35)
                         punto_att = coords
                     
-                    # Ordinamento automatico per orario di arrivo (il "miglior giro")
                     st.session_state.giro_igt = sorted(giro_ris, key=lambda x: x['ORA'])
                     dist_r = geodesic(punto_att, SEDE).km
                     st.session_state.rientro = (ora_att + timedelta(minutes=(dist_r/35)*60)).strftime("%H:%M")
                     st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
 
-    # --- VISUALIZZAZIONE ---
     if 'giro_igt' in st.session_state and st.session_state.giro_igt:
-        st.success(f"✅ Giro generato con successo per {len(st.session_state.giro_igt)} clienti.")
         st.info(f"🏁 Rientro stimato a Strada in Chianti: **{st.session_state.rientro}**")
         
         for i, p in enumerate(st.session_state.giro_igt):
@@ -158,6 +141,10 @@ if ws:
             c1, c2 = st.columns(2)
             with c1:
                 url_nav = f"https://www.google.com/maps/dir/?api=1&destination={p['COORDS'][0]},{p['COORDS'][1]}&travelmode=driving"
-                st.link_button("🚙 NAVIGA ORA", url_nav)
+                st.link_button("🚙 NAVIGA", url_nav)
             with c2:
-                if st.button("✅
+                if st.button(f"✅ VISITATO", key=f"btn_{i}"):
+                    cell = ws.find(p['NOME'])
+                    ws.update_cell(cell.row, list(df.columns).index("VISITATO")+1, "SI")
+                    st.session_state.giro_igt.pop(i)
+                    st.rerun()
