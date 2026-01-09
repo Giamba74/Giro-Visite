@@ -55,7 +55,6 @@ def is_open_check(ora_str, periods):
 # --- 3. CONNESSIONE E LOGICA ---
 st.title("⭐ BRIGHTSTAR - NAVIGATORE AUTOMATICO")
 
-# --- INSERISCI QUI IL TUO ID ---
 ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
 
 @st.cache_resource
@@ -73,58 +72,69 @@ ws = init_gsheet(ID_DEL_FOGLIO)
 
 if ws:
     data = ws.get_all_values()
-    df = pd.DataFrame(data[1:], columns=[h.upper() for h in data[0]])
-    if 'CAP' in df.columns:
-        df['CAP'] = df['CAP'].astype(str).str.replace('.0', '', regex=False).str.strip()
+    df = pd.DataFrame(data[1:], columns=[h.strip().upper() for h in data[0]])
+    
+    # --- AUTO-RILEVAMENTO COLONNE ---
+    # Cerchiamo le colonne indipendentemente da piccoli errori nel foglio
+    col_cliente = next((c for c in df.columns if "CLIENTE" in c), "CLIENTE")
+    col_indirizzo = next((c for c in df.columns if "INDIRIZZO" in c or "VIA" in c), "INDIRIZZO")
+    col_comune = next((c for c in df.columns if "COMUNE" in c), "COMUNE")
+    col_visitato = next((c for c in df.columns if "VISITATO" in c), "VISITATO")
+    col_cap = next((c for c in df.columns if "CAP" in c), "CAP")
 
-    with st.container():
-        st.markdown("<div class='header-box'>", unsafe_allow_html=True)
-        c1, c2 = st.columns(2)
-        with c1: sel_comuni = st.multiselect("📍 Scegli Comune:", sorted(df['COMUNE'].unique().tolist()))
-        with c2: sel_caps = st.multiselect("📮 Scegli CAP:", sorted(df['CAP'].unique().tolist()))
-        
-        mask = pd.Series([True] * len(df))
-        if sel_comuni: mask &= df['COMUNE'].isin(sel_comuni)
-        if sel_caps: mask &= df['CAP'].isin(sel_caps)
-        mask &= ~df['VISITATO'].str.contains('SI|SÌ', case=False, na=False)
-        
-        df_filtrato = df[mask]
-        lista_clienti = df_filtrato['CLIENTE'].tolist()
+    if col_indirizzo not in df.columns:
+        st.error(f"🚨 Non trovo la colonna degli indirizzi nel foglio! Controlla che si chiami 'INDIRIZZO'.")
+    else:
+        if col_cap in df.columns:
+            df[col_cap] = df[col_cap].astype(str).str.replace('.0', '', regex=False).str.strip()
 
-        # Selezione automatica di tutti i clienti filtrati
-        sel_clienti = st.multiselect("🎯 Clienti nel giro:", lista_clienti, default=lista_clienti)
-        
-        if st.button("🚀 GENERA IL MIGLIOR PERCORSO"):
-            if not sel_clienti:
-                st.warning("Filtra una zona per iniziare!")
-            else:
-                with st.spinner("Ottimizzazione con Google Maps..."):
-                    giro_ris = []
-                    punto_att = SEDE
-                    ora_att = datetime.now().replace(hour=8, minute=0, second=0)
-                    
-                    for nome in sel_clienti:
-                        riga = df[df['CLIENTE'] == nome].iloc[0]
-                        info = get_google_live_data(nome, riga['INDIRIZZO'], riga['COMUNE'])
-                        coords = info['coords'] if info else SEDE
-                        periods = info['periods'] if info else []
-                        tel = info['tel'] if info else riga.get('TELEFONO', '')
+        with st.container():
+            st.markdown("<div class='header-box'>", unsafe_allow_html=True)
+            c1, c2 = st.columns(2)
+            with c1: sel_comuni = st.multiselect("📍 Scegli Comune:", sorted(df[col_comune].unique().tolist()))
+            with c2: sel_caps = st.multiselect("📮 Scegli CAP:", sorted(df[col_cap].unique().tolist()) if col_cap in df.columns else [])
+            
+            mask = pd.Series([True] * len(df))
+            if sel_comuni: mask &= df[col_comune].isin(sel_comuni)
+            if col_cap in df.columns and sel_caps: mask &= df[col_cap].isin(sel_caps)
+            mask &= ~df[col_visitato].str.contains('SI|SÌ', case=False, na=False)
+            
+            df_filtrato = df[mask]
+            lista_clienti = df_filtrato[col_cliente].tolist()
 
-                        dist = geodesic(punto_att, coords).km
-                        ora_arrivo = ora_att + timedelta(minutes=(dist/35)*60)
+            sel_clienti = st.multiselect("🎯 Clienti nel giro:", lista_clienti, default=lista_clienti)
+            
+            if st.button("🚀 GENERA IL MIGLIOR PERCORSO"):
+                if not sel_clienti:
+                    st.warning("Filtra una zona per iniziare!")
+                else:
+                    with st.spinner("Ottimizzazione con Google Maps..."):
+                        giro_ris = []
+                        punto_att = SEDE
+                        ora_att = datetime.now().replace(hour=8, minute=0, second=0)
                         
-                        giro_ris.append({
-                            "NOME": nome, "ORA": ora_arrivo.strftime("%H:%M"),
-                            "APERTO": is_open_check(ora_arrivo.strftime("%H:%M"), periods),
-                            "TEL": tel, "COORDS": coords, "COMUNE": riga['COMUNE']
-                        })
-                        ora_att = ora_arrivo + timedelta(minutes=35)
-                        punto_att = coords
-                    
-                    st.session_state.giro_igt = sorted(giro_ris, key=lambda x: x['ORA'])
-                    dist_r = geodesic(punto_att, SEDE).km
-                    st.session_state.rientro = (ora_att + timedelta(minutes=(dist_r/35)*60)).strftime("%H:%M")
-                    st.rerun()
+                        for nome in sel_clienti:
+                            riga = df[df[col_cliente] == nome].iloc[0]
+                            info = get_google_live_data(nome, riga[col_indirizzo], riga[col_comune])
+                            coords = info['coords'] if info else SEDE
+                            periods = info['periods'] if info else []
+                            tel = info['tel'] if info else riga.get('TELEFONO', '')
+
+                            dist = geodesic(punto_att, coords).km
+                            ora_arrivo = ora_att + timedelta(minutes=(dist/35)*60)
+                            
+                            giro_ris.append({
+                                "NOME": nome, "ORA": ora_arrivo.strftime("%H:%M"),
+                                "APERTO": is_open_check(ora_arrivo.strftime("%H:%M"), periods),
+                                "TEL": tel, "COORDS": coords, "COMUNE": riga[col_comune]
+                            })
+                            ora_att = ora_arrivo + timedelta(minutes=35)
+                            punto_att = coords
+                        
+                        st.session_state.giro_igt = sorted(giro_ris, key=lambda x: x['ORA'])
+                        dist_r = geodesic(punto_att, SEDE).km
+                        st.session_state.rientro = (ora_att + timedelta(minutes=(dist_r/35)*60)).strftime("%H:%M")
+                        st.rerun()
 
     if 'giro_igt' in st.session_state and st.session_state.giro_igt:
         st.info(f"🏁 Rientro stimato a Strada in Chianti: **{st.session_state.rientro}**")
@@ -145,6 +155,6 @@ if ws:
             with c2:
                 if st.button(f"✅ VISITATO", key=f"btn_{i}"):
                     cell = ws.find(p['NOME'])
-                    ws.update_cell(cell.row, list(df.columns).index("VISITATO")+1, "SI")
+                    ws.update_cell(cell.row, list(df.columns).index(col_visitato)+1, "SI")
                     st.session_state.giro_igt.pop(i)
                     st.rerun()
