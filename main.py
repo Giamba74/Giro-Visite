@@ -80,5 +80,60 @@ if ws:
             if potenziali:
                 with st.spinner("Pianificazione percorso..."):
                     for p in potenziali:
-                        g_data = get_google_data(p[c_cliente], p[c_indirizzo], p
+                        g_data = get_google_data(p[c_cliente], p[c_indirizzo], p[c_comune])
+                        p['coords'] = g_data['coords'] if g_data else SEDE_COORDS
+                        p['g_tel'] = g_data['tel'] if g_data else p.get(c_tel, '')
+                        p['angle'] = np.arctan2(p['coords'][0] - SEDE_COORDS[0], p['coords'][1] - SEDE_COORDS[1])
+                    
+                    df_opt = pd.DataFrame(potenziali).sort_values(by=[c_comune, c_cap, 'angle'])
+                    
+                    giro_final = []
+                    punto_att = SEDE_COORDS
+                    ora_att = datetime.now().replace(hour=7, minute=30, second=0)
+                    
+                    for _, r in df_opt.head(tappe_max).iterrows():
+                        dist = geodesic(punto_att, r['coords']).km
+                        ora_arrivo = ora_att + timedelta(minutes=(dist/35)*60)
+                        giro_final.append({
+                            "NOME": r[c_cliente], "COD": r[c_codice], "ORA": ora_arrivo.strftime("%H:%M"),
+                            "TEL": r['g_tel'], "LAT": r['coords'][0], "LON": r['coords'][1], 
+                            "COMUNE": r[c_comune], "CAP": r[c_cap], "VIA": r[c_indirizzo], "NOTE": ""
+                        })
+                        ora_att = ora_arrivo + timedelta(minutes=35)
+                        punto_att = (r['coords'][0], r['coords'][1])
+                    st.session_state.giro_igt = giro_final
+                    st.rerun()
 
+    # --- 4. VISUALIZZAZIONE RISULTATI ---
+    if 'giro_igt' in st.session_state:
+        for i, p in enumerate(st.session_state.giro_igt):
+            with st.container():
+                st.markdown(f"""
+                <div class="tappa-card">
+                    <div style="display:flex; justify-content:space-between">
+                        <b>{i+1}. {p['NOME']}</b>
+                        <span class="time-badge">{p['ORA']}</span>
+                    </div>
+                    <div class="indirizzo-testo">📍 {p['VIA']}, {p['COMUNE']}</div>
+                    <small>Codice Cliente: {p['COD']}</small>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Note Vocali
+                st.session_state.giro_igt[i]['NOTE'] = st.text_area(f"Note per {p['NOME']}:", value=p['NOTE'], key=f"note_{i}", height=70)
+                
+                c1, c2, c3 = st.columns(3)
+                with c1: 
+                    # NAVIGAZIONE CORRETTA PER PIXEL
+                    nav_url = f"https://www.google.com/maps/dir/?api=1&destination={p['LAT']},{p['LON']}&travelmode=driving"
+                    st.link_button("🚙 NAVIGA", nav_url)
+                with c2: 
+                    if p['TEL']: st.link_button("📞 CHIAMA", f"tel:{p['TEL']}")
+                with c3:
+                    if st.button("✅ FATTO", key=f"f_{i}"):
+                        st.success("Tappa completata!")
+
+        if st.button("📧 FINISCI E INVIA REPORT"):
+            report = [f"{p['NOME']}: {p['NOTE']}" for p in st.session_state.giro_igt if p['NOTE'].strip()]
+            if report: st.info("Report note generato!")
+            else: st.warning("Nessuna nota inserita.")
