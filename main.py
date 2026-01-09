@@ -8,8 +8,8 @@ import requests
 import gspread
 from google.oauth2.service_account import Credentials
 
-# --- CONFIGURAZIONE ---
-st.set_page_config(page_title="Brightstar Google AI", page_icon="⭐", layout="wide")
+# --- 1. CONFIGURAZIONE ---
+st.set_page_config(page_title="Brightstar Google AI Pro", page_icon="⭐", layout="wide")
 SEDE = (43.661888, 11.305728) # Strada in Chianti
 API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
 
@@ -21,9 +21,8 @@ st.markdown("""<style>
     .badge-closed { background-color: #ff4b4b; color: white; padding: 3px 10px; border-radius: 10px; font-size: 0.8em; font-weight: bold; }
 </style>""", unsafe_allow_html=True)
 
-# --- FUNZIONI GOOGLE PLACES LIVE ---
+# --- 2. FUNZIONI GOOGLE LIVE ---
 def get_google_live_data(nome, comune):
-    """Interroga Google Maps per orari e telefono reali"""
     try:
         query = f"{nome} {comune} Italy"
         search_url = f"https://maps.googleapis.com/maps/api/place/textsearch/json?query={urllib.parse.quote(query)}&key={API_KEY}"
@@ -39,8 +38,7 @@ def get_google_live_data(nome, comune):
             }
     except: return None
 
-def is_open(ora_str, periods):
-    """Verifica se il cliente è aperto all'orario di arrivo stimato"""
+def is_open_check(ora_str, periods):
     if not periods: return True
     giorno_goog = (datetime.now().weekday() + 1) % 7
     ora_int = int(ora_str.replace(":", ""))
@@ -51,10 +49,10 @@ def is_open(ora_str, periods):
             if apre <= ora_int <= chiude: return True
     return False
 
-# --- LOGICA APP ---
-st.title("⭐ BRIGHTSTAR GOOGLE INTELLIGENCE")
+# --- 3. LOGICA PRINCIPALE ---
+st.title("⭐ BRIGHTSTAR GOOGLE AI - FULL FILTERS")
 
-ID_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" # Inserisci qui l'ID del tuo Google Sheet
+ID_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
 
 @st.cache_resource
 def init_gs():
@@ -65,23 +63,44 @@ def init_gs():
 gc = init_gs()
 if gc:
     ws = gc.open_by_key(ID_FOGLIO).get_worksheet(0)
-    # Lettura dati
     data = ws.get_all_values()
     df = pd.DataFrame(data[1:], columns=[h.upper() for h in data[0]])
     
+    # Pulizia CAP e dati
+    if 'CAP' in df.columns:
+        df['CAP'] = df['CAP'].astype(str).str.replace('.0', '', regex=False).str.strip()
+
     with st.container():
         st.markdown("<div class='header-box'>", unsafe_allow_html=True)
-        sel_clienti = st.multiselect("🎯 Scegli i clienti per il giro di oggi:", df['CLIENTE'].tolist())
+        col1, col2 = st.columns(2)
+        
+        # Filtri Preliminari
+        with col1:
+            comuni_list = sorted(df['COMUNE'].unique().tolist())
+            sel_comuni = st.multiselect("📍 Filtra per Comune:", comuni_list)
+        with col2:
+            cap_list = sorted(df['CAP'].unique().tolist())
+            sel_caps = st.multiselect("📮 Filtra per CAP:", cap_list)
+        
+        # Applichiamo il filtro al database per la scelta clienti
+        mask = pd.Series([True] * len(df))
+        if sel_comuni: mask &= df['COMUNE'].isin(sel_comuni)
+        if sel_caps: mask &= df['CAP'].isin(sel_caps)
+        
+        df_filtrato = df[mask]
+        
+        # Selezione dei clienti tra quelli filtrati
+        sel_clienti = st.multiselect("🎯 Scegli i clienti (tra quelli filtrati):", df_filtrato['CLIENTE'].tolist())
+        
         if st.button("🚀 GENERA GIRO OTTIMIZZATO (LIVE)"):
-            with st.spinner("L'intelligenza Google sta analizzando orari e traffico..."):
+            with st.spinner("Analisi orari e traffico in corso..."):
                 giro_calcolato = []
                 punto_att = SEDE
                 ora_att = datetime.now().replace(hour=7, minute=30, second=0)
                 
-                # Cerchiamo dati live per ogni cliente
                 for nome in sel_clienti:
-                    comune = df[df['CLIENTE']==nome]['COMUNE'].values[0]
-                    info = get_google_live_data(nome, comune)
+                    comune_c = df[df['CLIENTE']==nome]['COMUNE'].values[0]
+                    info = get_google_live_data(nome, comune_c)
                     if info:
                         dist = geodesic(punto_att, info['coords']).km
                         ora_arrivo = ora_att + timedelta(minutes=(dist/35)*60)
@@ -90,9 +109,10 @@ if gc:
                         giro_calcolato.append({
                             "NOME": nome,
                             "ORA": ora_str,
-                            "APERTO": is_open(ora_str, info['periods']),
+                            "APERTO": is_open_check(ora_str, info['periods']),
                             "TEL": info['tel'],
-                            "COORDS": info['coords']
+                            "COORDS": info['coords'],
+                            "COMUNE": comune_c
                         })
                         ora_att = ora_arrivo + timedelta(minutes=30)
                         punto_att = info['coords']
@@ -102,22 +122,23 @@ if gc:
                 st.session_state.rientro_goog = (ora_att + timedelta(minutes=(dist_r/35)*60)).strftime("%H:%M")
                 st.rerun()
 
+    # Visualizzazione Giro
     if 'giro_live' in st.session_state:
-        st.info(f"🏁 Rientro stimato a Strada in Chianti: **{st.session_state.rientro_goog}**")
+        st.info(f"🏁 Rientro previsto a Strada in Chianti: **{st.session_state.rientro_goog}**")
         for i, p in enumerate(st.session_state.giro_live):
             badge = '<span class="badge-open">APERTO ✅</span>' if p['APERTO'] else '<span class="badge-closed">CHIUSO ❌</span>'
             st.markdown(f"""<div class="tappa-card">
                 <div style="display:flex; justify-content:space-between">
                     <b>{i+1}. {p['NOME']}</b> {badge}
                 </div>
-                Arrivo: <b>{p['ORA']}</b> | 📞 {p['TEL']}
+                📍 {p['COMUNE']} | Arrivo: <b>{p['ORA']}</b><br>
+                📞 {p['TEL']}
             </div>""", unsafe_allow_html=True)
             
             c1, c2 = st.columns(2)
-            with c1: st.link_button("🚙 WAZE", f"https://waze.com/ul?ll={p['COORDS'][0]},{p['COORDS'][1]}&navigate=yes")
+            with c1: st.link_button("🚙 NAVIGA (GPS)", f"https://www.google.com/maps/dir/?api=1&destination={p['COORDS'][0]},{p['COORDS'][1]}&travelmode=driving")
             with c2:
-                if st.button("✅ FATTO", key=f"btn_{i}"):
-                    # Segna SI nel foglio Google
+                if st.button(f"✅ FATTO", key=f"btn_live_{i}"):
                     riga = ws.find(p['NOME'])
                     ws.update_cell(riga.row, list(df.columns).index("VISITATO")+1, "SI")
                     st.session_state.giro_live.pop(i)
