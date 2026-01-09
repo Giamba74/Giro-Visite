@@ -68,18 +68,6 @@ st.markdown("""
     }
     .highlight { color: #38bdf8; font-weight: 600; }
     
-    /* Meteo Box */
-    .meteo-widget {
-        background: rgba(15, 23, 42, 0.6);
-        border-radius: 12px;
-        padding: 15px;
-        text-align: center;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        margin-bottom: 25px;
-        color: white;
-        font-weight: 500;
-    }
-
     /* AI Badge */
     .ai-badge {
         font-size: 0.75rem;
@@ -95,7 +83,7 @@ st.markdown("""
 # --- CONFIGURAZIONI ---
 SEDE_COORDS = (43.661888, 11.305728)
 API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
-ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" # <--- ID FOGLIO
+ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" # <--- INCOLLA QUI IL TUO ID
 
 # --- 2. FUNZIONI AI & DATI ---
 @st.cache_resource
@@ -107,11 +95,11 @@ def connect_db():
         sh = client.open_by_key(ID_DEL_FOGLIO)
         ws_data = sh.get_worksheet(0) # Dati Clienti
         
-        # Gestione Foglio AI (Se non esiste, usa il primo ma darà errore, l'utente deve crearlo)
+        # Gestione Foglio AI (Se non esiste, usa None)
         try:
             ws_log = sh.worksheet("LOG_AI")
         except:
-            ws_log = None # Fallback se l'utente non l'ha creato
+            ws_log = None 
             
         return ws_data, ws_log
     except: return None, None
@@ -119,7 +107,6 @@ def connect_db():
 def get_ai_history(ws_log, cliente):
     """
     Legge la storia del cliente per predire la durata della visita.
-    Ritorna: Durata stimata (int) e booleano (True se è un dato storico, False se default)
     """
     if not ws_log: return 20, False # Default 20 min
     try:
@@ -147,6 +134,7 @@ def log_visit_ai(ws_log, cliente, durata_reale):
         ws_log.append_row(row)
 
 def get_google_data(query_list):
+    """Funzione corretta per recuperare dati da Google"""
     if not API_KEY: return None
     for q in query_list:
         try:
@@ -199,10 +187,13 @@ if ws:
         st.divider()
         st.caption("Statistiche AI:")
         if ws_ai:
-            n_logs = len(ws_ai.get_all_values()) - 1
-            st.success(f"🧠 L'AI ha imparato da {max(0, n_logs)} visite passate.")
+            try:
+                n_logs = len(ws_ai.get_all_values()) - 1
+                st.success(f"🧠 L'AI ha imparato da {max(0, n_logs)} visite passate.")
+            except:
+                st.warning("Foglio LOG_AI vuoto.")
         else:
-            st.warning("Foglio 'LOG_AI' mancante. Crea il foglio per attivare l'apprendimento.")
+            st.warning("Foglio 'LOG_AI' mancante. Crealo su Google Sheets per attivare l'apprendimento.")
 
     # Main Dashboard
     st.markdown("### 🚀 Brightstar AI Navigator")
@@ -233,9 +224,10 @@ if ws:
                     best_score = float('inf')
                     
                     for p in pool:
-                        # Dati Google
+                        # Dati Google - CORRETTO QUI IL NOME DELLA FUNZIONE
                         if 'g_data' not in p:
-                            p['g_data'] = get_google_details([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_nom]}, {p[c_com]}"]) or {'coords': SEDE_COORDS, 'found': False, 'periods': []}
+                            query_search = [f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_nom]}, {p[c_com]}"]
+                            p['g_data'] = get_google_data(query_search) or {'coords': SEDE_COORDS, 'found': False, 'periods': []}
                         
                         dist = geodesic(curr_loc, p['g_data']['coords']).km
                         travel_min = (dist / 35) * 60
@@ -259,7 +251,6 @@ if ws:
                     
                     if best:
                         # AI HISTORY CHECK
-                        # Qui il sistema decide la durata basandosi sulla storia
                         ai_duration, is_learned = get_ai_history(ws_ai, best[c_nom])
                         
                         best['duration'] = ai_duration
@@ -270,7 +261,6 @@ if ws:
                         curr_loc = best['g_data']['coords']
                         pool.remove(best)
                     else:
-                        # Avanza tempo se stallo
                         if (limit - curr_t).seconds < 1800: break
                         curr_t += timedelta(minutes=15)
                 
@@ -282,16 +272,14 @@ if ws:
         route = st.session_state.master_route
         end_time = route[-1]['arr'].strftime("%H:%M") if route else "--:--"
         
-        # Progress Bar
-        completed = 0 # Placeholder per futuro
         st.progress(0, text=f"Pianificazione completata. Rientro stimato: {end_time}")
         
         for i, p in enumerate(route):
             # Design della Card
-            bg_color = "rgba(30, 41, 59, 0.7)"
             status_dot = "🟢" if p['is_open'] else "🔴"
             ai_tag = f"<span class='ai-badge'>AI: {p['duration']} min</span>" if p.get('learned') else f"<span class='ai-badge' style='background:#334155; border-color:#475569'>Std: {p['duration']} min</span>"
-            
+            tel_num = p.get('g_data', {}).get('tel') or p.get(c_tel) or 'N/D'
+
             st.markdown(f"""
             <div class="client-card">
                 <div class="card-header">
@@ -304,7 +292,7 @@ if ws:
                 </div>
                 <div class="info-row">
                     <span>{ai_tag}</span>
-                    <span class="highlight">📞 {p.get('g_data', {}).get('tel') or 'N/D'}</span>
+                    <span class="highlight">📞 {tel_num}</span>
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -316,18 +304,14 @@ if ws:
                 lnk = f"https://www.google.com/maps/dir/?api=1&destination={coords[0]},{coords[1]}&travelmode=driving"
                 st.link_button("🚙 NAVIGA", lnk, use_container_width=True)
             with c2:
-                t = p.get('g_data', {}).get('tel') or p.get(c_tel)
-                if t: st.link_button("📞 CHIAMA", f"tel:{t}", use_container_width=True)
+                if tel_num != 'N/D': st.link_button("📞 CHIAMA", f"tel:{tel_num}", use_container_width=True)
             with c3:
                 if st.button("✅ FATTO", key=f"d_{i}", use_container_width=True):
-                    # 1. Aggiorna DB
                     try:
                         cell = ws.find(p[c_nom])
                         ws.update_cell(cell.row, list(df.columns).index(c_vis)+1, "SI")
                         
-                        # 2. APPOLOGIZZA (Insegna all'AI)
-                        # Calcola tempo reale trascorso dall'arrivo previsto a ora
-                        # (In una app reale useremmo timestamp preciso, qui stimiamo in base al click)
+                        # INSEGNA ALL'AI
                         log_visit_ai(ws_ai, p[c_nom], p['duration']) 
                         
                         st.session_state.master_route.pop(i)
