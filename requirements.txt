@@ -4,3 +4,5 @@ geopy
 folium
 streamlit-folium
 openpyxl
+gspread
+google-auth
