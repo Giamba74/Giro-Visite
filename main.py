@@ -52,13 +52,17 @@ st.markdown("""
 COORDS = { "Chianti": (43.661888, 11.305728), "Firenze": (43.7696, 11.2558), "Arezzo": (43.4631, 11.8781) }
 SEDE_COORDS = COORDS["Chianti"]
 API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
-ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" # <--- RIMETTI IL TUO ID
+
+# ==============================================================================
+# 👇 MODIFICA SOLO QUI SOTTO CON IL TUO ID FOGLIO GOOGLE 👇
+ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
+# ==============================================================================
 
 # --- AGENTI INTELLIGENTI ---
 
 def agente_strategico(note_precedenti):
     """Analizza lo storico e dà consigli comportamentali"""
-    # CORREZIONE: Se vuoto, ritorna stile Neutro (Grigio), NON None
+    # CORREZIONE CRITICA: Restituisce stile neutro se vuoto, mai None
     if not note_precedenti: 
         return "ℹ️ COACH: Nessuno storico recente. Raccogli info.", "background: rgba(51, 65, 85, 0.5); border: 1px solid #64748b;"
     
@@ -71,7 +75,6 @@ def agente_strategico(note_precedenti):
     if any(x in txt for x in ['interessato', 'preventivo', 'forse']):
         return "🎯 COACH: È caldo! Oggi devi chiudere. Porta il contratto.", "background: rgba(22, 101, 52, 0.6); border: 1px solid #4ade80;"
     
-    # Default se c'è testo ma nessuna parola chiave
     return f"ℹ️ MEMO: {note_precedenti[:50]}...", "background: rgba(51, 65, 85, 0.6); border: 1px solid #94a3b8;"
 
 def agente_meteo_territoriale():
@@ -169,7 +172,7 @@ if ws:
     c_cap = next((c for c in df.columns if "CAP" in c), "CAP")
     c_vis = next(c for c in df.columns if "VISITATO" in c)
     c_tel = next((c for c in df.columns if "TELEFONO" in c), "TELEFONO")
-    # NUOVA COLONNA CANVASS (Opzionale, se non c'è non crasha)
+    # NUOVA COLONNA CANVASS
     c_canv = next((c for c in df.columns if "CANVASS" in c or "PROMO" in c), None)
     
     if c_cap in df.columns: df[c_cap] = df[c_cap].astype(str).str.replace('.0','').str.zfill(5)
@@ -228,7 +231,7 @@ if ws:
                         # Priorità a chi ha CANVASS attivo!
                         score = dist_air
                         if c_canv and p.get(c_canv) and str(p[c_canv]).strip():
-                            score -= 3 # Bonus priorità per chi ha promo da fare
+                            score -= 3 
                             
                         if score < best_score:
                             best_score = score
@@ -268,45 +271,39 @@ if ws:
             tel = p.get('g_data', {}).get('tel') or p.get(c_tel) or ''
             ora_str = p['arr'].strftime('%H:%M')
             
-            # --- 1. AGENTE STRATEGICO (Storico) ---
+            # --- 1. AGENTE STRATEGICO ---
             note_old = p.get('NOTE', '') 
             msg_coach, style_coach = agente_strategico(note_old)
             
-            # --- 2. AGENTE CANVASS (Promo Attive) ---
-            canvass_txt = ""
+            # --- 2. AGENTE CANVASS ---
+            canvass_html = ""
             if c_canv and p.get(c_canv):
                 txt = str(p[c_canv]).strip()
                 if txt:
-                    canvass_txt = f"""
-                    <div class="canvass-box">
-                        📢 CANVASS ATTIVO: {txt}
-                    </div>
-                    """
+                    canvass_html = f"<div class='canvass-box'>📢 CANVASS: {txt}</div>"
             
-            # --- RENDER CARD ---
-            st.markdown(f"""
-            <div class="client-card">
-                <div class="card-header">
-                    <span class="client-name">{i+1}. {p[c_nom]}</span>
-                    <div class="arrival-time">{ora_str}</div>
-                </div>
-                
-                {canvass_txt}
-                
-                <div class="strategy-box" style="{style_coach}">
-                    {msg_coach if msg_coach else 'Nessuno storico recente.'}
-                </div>
-                
-                <div class="info-row">
-                    <span>📍 {p[c_ind]}, {p[c_com]}</span>
-                    <span class="real-traffic">🚗 Guida: {p['travel_time']} min</span>
-                </div>
-                <div class="info-row">
-                    <span class="ai-badge">⏱️ {p['duration']} min ({ai_lbl})</span>
-                    <span class="highlight">{tel}</span>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            # --- 3. RENDER CARD (CORRETTO SENZA SPAZI) ---
+            html_card = f"""
+<div class="client-card">
+<div class="card-header">
+<span class="client-name">{i+1}. {p[c_nom]}</span>
+<div class="arrival-time">{ora_str}</div>
+</div>
+{canvass_html}
+<div class="strategy-box" style="{style_coach}">
+{msg_coach}
+</div>
+<div class="info-row">
+<span>📍 {p[c_ind]}, {p[c_com]}</span>
+<span class="real-traffic">🚗 Guida: {p['travel_time']} min</span>
+</div>
+<div class="info-row">
+<span class="ai-badge">⏱️ {p['duration']} min ({ai_lbl})</span>
+<span class="highlight">{tel}</span>
+</div>
+</div>
+"""
+            st.markdown(html_card, unsafe_allow_html=True)
             
             c1, c2, c3 = st.columns([1, 1, 1])
             with c1:
@@ -324,4 +321,3 @@ if ws:
                         st.session_state.master_route.pop(i)
                         st.rerun()
                     except: st.error("Errore DB")
-
