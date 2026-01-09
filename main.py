@@ -58,7 +58,7 @@ def is_open_check(ora_str, periods):
 st.title("⭐ BRIGHTSTAR GOOGLE AI")
 
 # INSERISCI L'ID DEL TUO FOGLIO QUI
-ID_DEL_FOGLIO = "IL_TUO_ID_LUNGO_QUI" 
+ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
 
 @st.cache_resource
 def init_gsheet(sheet_id):
@@ -159,3 +159,4 @@ if ws:
                             st.session_state.giro_igt.pop(i)
                             st.rerun()
                         except: st.error("Errore aggiornamento foglio.")
+
