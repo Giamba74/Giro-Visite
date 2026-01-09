@@ -39,7 +39,7 @@ def get_google_data(nome, indirizzo, comune):
     except: return None
 
 # --- 3. DATI ---
-ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0"
+ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" # <--- Sostituisci con il tuo ID
 
 @st.cache_resource
 def init_gsheet(sheet_id):
@@ -55,10 +55,30 @@ if ws:
     data = ws.get_all_values()
     df = pd.DataFrame(data[1:], columns=[h.strip().upper() for h in data[0]])
     
-    # Rilevamento Colonne
+    # Rilevamento Colonne Semplificato per evitare SyntaxError
     c_cliente = next((c for c in df.columns if "CLIENTE" in c), "CLIENTE")
     c_indirizzo = next((c for c in df.columns if "INDIRIZZO" in c or "VIA" in c), "INDIRIZZO")
     c_comune = next((c for c in df.columns if "COMUNE" in c), "COMUNE")
     c_cap = next((c for c in df.columns if "CAP" in c), "CAP")
     c_codice = next((c for c in df.columns if "CODICE" in c), "CODICE")
-    c_tel = next((c for c
+    c_tel = next((c for c in df.columns if "TELEFONO" in c), "TELEFONO")
+    c_visitato = next((c for c in df.columns if "VISITATO" in c), "VISITATO")
+
+    with st.container():
+        st.markdown("<div class='header-box'>", unsafe_allow_html=True)
+        col1, col2 = st.columns(2)
+        with col1: 
+            sel_comuni = st.multiselect("📍 Filtra Zona (Comuni):", sorted(df[c_comune].unique().tolist()))
+        with col2: 
+            tappe_max = st.slider("Numero visite:", 5, 20, 10)
+        
+        if st.button("🚀 GENERA GIRO OTTIMIZZATO"):
+            mask = ~df[c_visitato].str.contains('SI|SÌ', case=False, na=False)
+            if sel_comuni: mask &= df[c_comune].isin(sel_comuni)
+            potenziali = df[mask].to_dict('records')
+
+            if potenziali:
+                with st.spinner("Pianificazione percorso..."):
+                    for p in potenziali:
+                        g_data = get_google_data(p[c_cliente], p[c_indirizzo], p
+
