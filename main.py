@@ -19,7 +19,6 @@ TZ_ITALY = pytz.timezone('Europe/Rome')
 st.markdown("""
     <style>
     .stApp { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); font-family: 'Segoe UI', sans-serif; color: #e2e8f0; }
-    .meteo-card { padding: 15px; border-radius: 12px; color: white; margin-bottom: 25px; text-align: center; font-weight: bold; border: 1px solid rgba(255,255,255,0.2); }
     .client-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px; padding: 20px; margin-bottom: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
     .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 10px; }
     .client-name { font-size: 1.4rem; font-weight: 700; color: #f8fafc; }
@@ -47,31 +46,58 @@ API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
 ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
 # ==============================================================================
 
-# --- GESTIONE MEMORIA ---
+@st.cache_resource
+def connect_db():
+    try:
+        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+        client = gspread.authorize(creds)
+        sh = client.open_by_key(ID_DEL_FOGLIO)
+        ws_main = sh.get_worksheet(0)
+        
+        ws_log = None
+        if "LOG_AI" in [w.title for w in sh.worksheets()]:
+             ws_log = sh.worksheet("LOG_AI")
+        
+        ws_mem = None
+        if "MEMORIA_GIRO" in [w.title for w in sh.worksheets()]:
+             ws_mem = sh.worksheet("MEMORIA_GIRO")
+             if not ws_mem.acell("A1").value:
+                 ws_mem.update_acell("A1", "DATA"); ws_mem.update_acell("B1", "JSON_DATA")
+                 ws_mem.update_acell("D1", "DB_CLIENTE"); ws_mem.update_acell("E1", "DB_TASKS")
+        
+        return ws_main, ws_log, ws_mem
+    except Exception as e:
+        return None, None, None
+
+# --- GESTIONE MEMORIA PERSISTENTE ---
 def salva_giro_solo_rotta(sh_memoria, rotta_data):
     try:
         dati_export = copy.deepcopy(rotta_data)
-        now_str = datetime.now(TZ_ITALY).strftime("%d-%m-%Y")
+        now_str = datetime.now(TZ_ITALY).strftime("%d-%m-%Y") 
         for p in dati_export:
             if isinstance(p.get('arr'), datetime): p['arr'] = p['arr'].strftime("%Y-%m-%d %H:%M:%S")
+        
         json_dump = json.dumps(dati_export)
         sh_memoria.update_acell("A2", now_str)
-        time.sleep(0.5) # Pausa anti-errore Google
+        time.sleep(0.5) 
         sh_memoria.update_acell("B2", json_dump)
-    except: st.warning("Salvataggio lento, riprova tra poco.")
+    except: pass 
 
 def carica_giro_da_foglio(sh_memoria):
     try:
-        saved_date = sh_memoria.acell("A2").value
         json_data = sh_memoria.acell("B2").value
-        if saved_date and json_data:
-            today = datetime.now(TZ_ITALY).strftime("%d-%m-%Y")
-            if saved_date == today:
-                rotta = json.loads(json_data)
-                for p in rotta:
-                    if p.get('arr'): p['arr'] = datetime.strptime(p['arr'], "%Y-%m-%d %H:%M:%S")
-                    if 'tasks_completed' not in p: p['tasks_completed'] = []
-                return rotta
+        if json_data:
+            rotta = json.loads(json_data)
+            for p in rotta:
+                if p.get('arr') and isinstance(p['arr'], str):
+                    try: p['arr'] = datetime.strptime(p['arr'], "%Y-%m-%d %H:%M:%S")
+                    except: p['arr'] = datetime.now(TZ_ITALY)
+                
+                if 'tasks_completed' not in p: p['tasks_completed'] = []
+                if 'g_data' not in p: p['g_data'] = {'coords': None, 'found': False, 'tel': ''}
+                
+            return rotta
     except: pass
     return None
 
@@ -104,8 +130,8 @@ def aggiorna_attivita_cliente(sh_memoria, cliente, tasks_list):
             next_row = len(col_d) + 1
             sh_memoria.update_cell(next_row, 4, cliente)
             sh_memoria.update_cell(next_row, 5, json_tasks)
-        st.toast(f"✅ Dati Salvati per {cliente}", icon="💾")
-    except: st.error("Errore server Google. Attendi 30 sec.")
+        st.toast(f"Dati Salvati: {cliente}", icon="💾")
+    except: st.error("Errore Salvataggio Parziale (Server Busy)")
 
 def pulisci_attivita_cliente(sh_memoria, cliente):
     try:
@@ -119,81 +145,48 @@ def pulisci_attivita_cliente(sh_memoria, cliente):
             sh_memoria.update_cell(row_idx, 5, "")
     except: pass
 
-# --- AI & CORE ---
+# --- CORE FUNCTIONS ---
 def agente_strategico(note_precedenti):
-    if not note_precedenti: return "ℹ️ COACH: Nessuno storico recente. Raccogli info.", "border-left-color: #64748b;"
+    if not note_precedenti: return "ℹ️ COACH: Nessuno storico recente.", "border-left-color: #64748b;"
     txt = str(note_precedenti).lower()
-    if any(x in txt for x in ['arrabbiato', 'reclamo', 'ritardo', 'problema', 'rotto']):
-        return "🛡️ COACH: Cliente a rischio. Empatia massima.", "border-left-color: #f87171; background: rgba(153, 27, 27, 0.2);"
-    if any(x in txt for x in ['prezzo', 'costoso', 'sconto', 'caro']):
-        return "💎 COACH: Difendi il valore. Non svendere.", "border-left-color: #fb923c; background: rgba(146, 64, 14, 0.2);"
-    if any(x in txt for x in ['interessato', 'preventivo', 'forse']):
-        return "🎯 COACH: È caldo! Oggi devi chiudere.", "border-left-color: #4ade80; background: rgba(22, 101, 52, 0.2);"
-    return f"ℹ️ MEMO: {note_precedenti[:60]}...", "border-left-color: #94a3b8;"
-
-def agente_meteo_territoriale():
-    try:
-        lats, lons = f"{COORDS['Chianti'][0]},{COORDS['Firenze'][0]},{COORDS['Arezzo'][0]}", f"{COORDS['Chianti'][1]},{COORDS['Firenze'][1]},{COORDS['Arezzo'][1]}"
-        url = f"https://api.open-meteo.com/v1/forecast?latitude={lats}&longitude={lons}&hourly=temperature_2m,precipitation_probability&timezone=Europe%2FRome&forecast_days=1"
-        res = requests.get(url).json()
-        res = res if isinstance(res, list) else [res]
-        needs_auto = False
-        details = []
-        for i, z in enumerate(res):
-            nome = ["Chianti", "Firenze", "Arezzo"][i]
-            rain_prob = max(z['hourly']['precipitation_probability'][9:18])
-            temp_media = sum(z['hourly']['temperature_2m'][9:18]) / 9
-            details.append(f"{nome}: {int(temp_media)}°C/Pioggia {rain_prob}%")
-            if rain_prob > 25 or temp_media < 3: needs_auto = True
-        
-        veicolo = "AUTO 🚗" if needs_auto else "ZONTES 350 🛵"
-        msg = f"{veicolo} (Algoritmo Meteo)<br><span style='font-size:0.8em; font-weight:normal'>{', '.join(details)}</span>"
-        style = "background: linear-gradient(90deg, #b91c1c, #ef4444);" if needs_auto else "background: linear-gradient(90deg, #15803d, #22c55e);"
-        return msg, style
-    except: return "METEO N/D", "background: #64748b;"
+    if any(x in txt for x in ['arrabbiato', 'reclamo', 'ritardo']):
+        return "🛡️ COACH: Cliente a rischio.", "border-left-color: #f87171; background: rgba(153, 27, 27, 0.2);"
+    if any(x in txt for x in ['prezzo', 'costoso', 'sconto']):
+        return "💎 COACH: Difendi il valore.", "border-left-color: #fb923c; background: rgba(146, 64, 14, 0.2);"
+    if any(x in txt for x in ['interessato', 'preventivo']):
+        return "🎯 COACH: È caldo!", "border-left-color: #4ade80; background: rgba(22, 101, 52, 0.2);"
+    return f"ℹ️ MEMO: {note_precedenti[:50]}...", "border-left-color: #94a3b8;"
 
 def get_real_travel_time(origin_coords, dest_coords):
-    if not API_KEY: 
-        dist = geodesic(origin_coords, dest_coords).km
-        return int(((dist * 1.5) / 40) * 60)
+    if not API_KEY or not origin_coords or not dest_coords: 
+        # Fallback se non ci sono coordinate
+        return 20 
     try:
         url = f"https://maps.googleapis.com/maps/api/distancematrix/json?origins={origin_coords[0]},{origin_coords[1]}&destinations={dest_coords[0]},{dest_coords[1]}&departure_time=now&mode=driving&key={API_KEY}"
-        res = requests.get(url).json()
+        res = requests.get(url, timeout=3).json() # Timeout aumentato
         if res['status'] == 'OK' and res['rows'][0]['elements'][0]['status'] == 'OK':
             seconds = res['rows'][0]['elements'][0]['duration_in_traffic']['value']
             return int(seconds / 60)
     except: pass
-    dist = geodesic(origin_coords, dest_coords).km
-    return int(((dist * 1.5) / 45) * 60)
+    try:
+        dist = geodesic(origin_coords, dest_coords).km
+        return int(((dist * 1.5) / 45) * 60)
+    except: return 20
 
 def get_google_data(query_list):
     if not API_KEY: return None
+    # Pausa strategica anti-blocco
+    time.sleep(0.1) 
     for q in query_list:
         try:
-            res = requests.get(f"https://maps.googleapis.com/maps/api/place/textsearch/json?query={urllib.parse.quote(q)}&key={API_KEY}").json()
+            res = requests.get(f"https://maps.googleapis.com/maps/api/place/textsearch/json?query={urllib.parse.quote(q)}&key={API_KEY}", timeout=3).json()
             if res.get('results'):
                 r = res['results'][0]
                 pid = r['place_id']
-                det = requests.get(f"https://maps.googleapis.com/maps/api/place/details/json?place_id={pid}&fields=opening_hours,formatted_phone_number&key={API_KEY}").json()
+                det = requests.get(f"https://maps.googleapis.com/maps/api/place/details/json?place_id={pid}&fields=opening_hours,formatted_phone_number&key={API_KEY}", timeout=3).json()
                 return {"coords": (r['geometry']['location']['lat'], r['geometry']['location']['lng']), "tel": det.get('result', {}).get('formatted_phone_number', ''), "found": True}
         except: continue
     return None
-
-@st.cache_resource
-def connect_db():
-    try:
-        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
-        client = gspread.authorize(creds)
-        sh = client.open_by_key(ID_DEL_FOGLIO)
-        ws_main = sh.get_worksheet(0)
-        ws_log = sh.worksheet("LOG_AI") if "LOG_AI" in [w.title for w in sh.worksheets()] else None
-        ws_mem = sh.worksheet("MEMORIA_GIRO") if "MEMORIA_GIRO" in [w.title for w in sh.worksheets()] else None
-        if ws_mem and not ws_mem.acell("A1").value:
-            ws_mem.update_acell("A1", "DATA"); ws_mem.update_acell("B1", "JSON_DATA")
-            ws_mem.update_acell("D1", "DB_CLIENTE"); ws_mem.update_acell("E1", "DB_TASKS")
-        return ws_main, ws_log, ws_mem
-    except Exception as e: st.error(f"Errore DB: {e}"); return None, None, None
 
 def get_ai_duration(ws_log, cliente):
     if not ws_log: return 20, False
@@ -207,7 +200,6 @@ def get_ai_duration(ws_log, cliente):
 
 def log_visit(ws_log, cliente, durata, note_extra=""):
     if ws_log:
-        if not ws_log.get_all_values(): ws_log.append_row(["CLIENTE", "DATA", "ORA", "DURATA_MIN", "NOTE_ATTIVITA"])
         now = datetime.now(TZ_ITALY)
         ws_log.append_row([cliente, now.strftime("%d-%m-%Y"), now.strftime("%H:%M"), durata, note_extra])
 
@@ -234,19 +226,20 @@ if ws:
 
     if "CAP" in df.columns: df[c_cap] = df[c_cap].astype(str).str.replace('.0','').str.zfill(5)
 
+    # --- 🔄 AUTO-LOADING ---
     if 'master_route' not in st.session_state and ws_mem:
-        rotta_salvata = carica_giro_da_foglio(ws_mem)
-        if rotta_salvata:
-            st.session_state.master_route = rotta_salvata
-            st.toast("📅 Giro caricato.", icon="💾")
+        with st.spinner("🔄 Ripristino sessione..."):
+            rotta_salvata = carica_giro_da_foglio(ws_mem)
+            if rotta_salvata:
+                st.session_state.master_route = rotta_salvata
+                st.success("🔄 GIRO RECUPERATO")
     
     if 'db_tasks' not in st.session_state and ws_mem:
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
     with st.sidebar:
         st.title("💼 CRM Filters")
-        st.markdown("### 📍 Punto di Partenza")
-        indirizzo_start = st.text_input("Dove ti trovi ora?", value="Chianti, Sede")
+        indirizzo_start = st.text_input("📍 Partenza:", value="Chianti, Sede")
         st.divider()
         num_visite = st.slider("Numero visite:", 1, 15, 8)
         only_premium = st.toggle("💎 Solo Clienti PREMIUM", value=True)
@@ -263,13 +256,9 @@ if ws:
              st.rerun()
 
     st.markdown("### 🚀 Brightstar CRM Dashboard")
-    msg, style = agente_meteo_territoriale()
-    col_meteo_1, col_meteo_2 = st.columns([3, 1])
-    with col_meteo_1: st.markdown(f"<div class='meteo-card' style='{style}'>{msg}</div>", unsafe_allow_html=True)
-    with col_meteo_2: st.link_button("🌤️ LaMMA Toscana", "https://www.lamma.rete.toscana.it/", use_container_width=True)
 
     if st.button("CALCOLA NUOVO GIRO", type="primary", use_container_width=True):
-        if not ws_mem: st.error("Errore Memoria!")
+        if not ws_mem: st.error("Errore: Manca foglio MEMORIA_GIRO!")
         else:
             start_coords = SEDE_COORDS
             if indirizzo_start:
@@ -287,20 +276,43 @@ if ws:
             
             if not raw: st.warning("Nessun cliente trovato.")
             else:
-                with st.spinner("⏳ Ottimizzazione..."):
+                # --- CALCOLO CON BARRA DI PROGRESSO E TOLLERANZA ERRORI ---
+                prog_bar = st.progress(0, text="Ricerca Indirizzi...")
+                pool_pronta = []
+                total = len(raw)
+                
+                for i, p in enumerate(raw):
+                    prog_bar.progress((i + 1) / total, text=f"🔍 Analisi: {p[c_nom]}")
+                    
+                    if 'g_data' not in p:
+                        # Cerca indirizzo
+                        res = get_google_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_nom]}, {p[c_com]}"])
+                        if res and res['found']:
+                             p['g_data'] = res
+                        else:
+                             # FALLBACK: Se Google fallisce, usa coordinate fittizie (Sede) per NON perdere il cliente
+                             p['g_data'] = {'coords': SEDE_COORDS, 'found': False, 'tel': ''}
+                    
+                    pool_pronta.append(p)
+                
+                prog_bar.empty()
+
+                with st.spinner("⏳ Ordinamento percorso..."):
                     rotta = []
                     now = datetime.now(TZ_ITALY)
                     start_t = now if (7 <= now.hour < 19) else now.replace(hour=7, minute=30) + timedelta(days=(1 if now.hour>=19 else 0))
                     limit = start_t.replace(hour=19, minute=30)
-                    curr_t, curr_loc, pool = start_t, start_coords, raw.copy()
+                    curr_t, curr_loc, pool = start_t, start_coords, pool_pronta.copy()
 
                     while pool and curr_t < limit and len(rotta) < num_visite:
                         best = None; best_score = float('inf')
                         for p in pool:
-                            if 'g_data' not in p:
-                                p['g_data'] = get_google_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_nom]}, {p[c_com]}"]) or {'coords': None, 'found': False}
-                            if not p['g_data']['found']: continue
-                            dist_air = geodesic(curr_loc, p['g_data']['coords']).km
+                            # Calcola distanza (Se GPS non trovato, distanza sarà zero o fittizia ma non blocca)
+                            c_target = p['g_data']['coords'] if p['g_data']['coords'] else curr_loc
+                            
+                            try: dist_air = geodesic(curr_loc, c_target).km
+                            except: dist_air = 9999 # Penality se errore
+                            
                             score = dist_air
                             if p[c_nom] in sel_forced: score -= 100000 
                             if c_att and p.get(c_att) and str(p[c_att]).strip(): score -= 5
@@ -308,13 +320,14 @@ if ws:
                             if score < best_score: best_score, best = score, p
                         
                         if best:
-                            real_mins = get_real_travel_time(curr_loc, best['g_data']['coords'])
+                            c_best = best['g_data']['coords'] if best['g_data']['coords'] else curr_loc
+                            real_mins = get_real_travel_time(curr_loc, c_best)
                             arrival_real = curr_t + timedelta(minutes=real_mins)
                             if arrival_real > limit: pool.remove(best); continue
                             dur_visita, learned = get_ai_duration(ws_ai, best[c_nom])
                             best['arr'], best['travel_time'], best['duration'], best['learned'] = arrival_real, real_mins, dur_visita, learned
                             best['tasks_completed'] = st.session_state.db_tasks.get(best[c_nom], [])
-                            rotta.append(best); curr_t = arrival_real + timedelta(minutes=dur_visita); curr_loc = best['g_data']['coords']; pool.remove(best)
+                            rotta.append(best); curr_t = arrival_real + timedelta(minutes=dur_visita); curr_loc = c_best; pool.remove(best)
                         else: break
                     st.session_state.master_route = rotta
                     if ws_mem: salva_giro_solo_rotta(ws_mem, rotta)
@@ -341,11 +354,17 @@ if ws:
             if valore_canvass and str(valore_canvass).strip():
                 canvass_html = f"<div style='background:linear-gradient(90deg, #059669, #10b981); color:white; padding:10px; border-radius:8px; margin-bottom:10px; font-weight:bold; border:1px solid #34d399;'>📢 CANVASS: {valore_canvass}</div>"
 
+            # ALERT VISIVO SE MAPPA NON TROVATA
+            map_status = ""
+            if not p['g_data']['found']:
+                map_status = "<div style='color: #ef4444; font-weight:bold; margin-top:5px;'>⚠️ INDIRIZZO NON TROVATO (Coordinate stimate)</div>"
+
             html_card = f"""
 <div class="client-card">
 <div class="card-header"><div style="display:flex; align-items:center; flex-wrap: wrap;">{forced_html}{prem_html}<span class="client-name">{i+1}. {p[c_nom]}</span></div><div class="arrival-time">{ora_str}</div></div>
 {canvass_html}
 <div class="strategy-box" style="{style_coach}">{msg_coach}</div>
+{map_status}
 <div class="info-row"><span>📍 {p[c_ind]}, {p[c_com]}</span><span class="real-traffic">🚗 Guida: {p['travel_time']} min</span></div>
 <div class="info-row"><span class="ai-badge">⏱️ {p['duration']} min ({ai_lbl})</span><span class="highlight">{tel_display}</span></div>
 </div>"""
@@ -365,13 +384,16 @@ if ws:
                         if nuovo_cliente_nome != "- Seleziona -":
                             dati_nuovo = df[df[c_nom] == nuovo_cliente_nome].to_dict('records')[0]
                             g_data_nuovo = get_google_data([f"{dati_nuovo[c_ind]}, {dati_nuovo[c_com]}, Italy", f"{dati_nuovo[c_nom]}, {dati_nuovo[c_com]}"])
-                            if g_data_nuovo and g_data_nuovo['found']:
-                                dati_nuovo['g_data'] = g_data_nuovo; dati_nuovo['arr'] = p['arr']; dati_nuovo['duration'] = p['duration']; dati_nuovo['travel_time'] = p['travel_time']
-                                dati_nuovo['tasks_completed'] = st.session_state.db_tasks.get(dati_nuovo[c_nom], [])
-                                st.session_state.master_route[i] = dati_nuovo
-                                if ws_mem: salva_giro_solo_rotta(ws_mem, st.session_state.master_route)
-                                st.rerun()
-                            else: st.error("Indirizzo non trovato.")
+                            # Anche qui logica "safe": se non trova, usa coordinate fittizie
+                            if not g_data_nuovo or not g_data_nuovo['found']:
+                                g_data_nuovo = {'coords': SEDE_COORDS, 'found': False, 'tel': ''}
+                            
+                            dati_nuovo['g_data'] = g_data_nuovo; dati_nuovo['arr'] = p['arr']; dati_nuovo['duration'] = p['duration']; dati_nuovo['travel_time'] = p['travel_time']
+                            dati_nuovo['tasks_completed'] = st.session_state.db_tasks.get(dati_nuovo[c_nom], [])
+                            st.session_state.master_route[i] = dati_nuovo
+                            if ws_mem: salva_giro_solo_rotta(ws_mem, st.session_state.master_route)
+                            st.rerun()
+
                 st.dataframe(pd.DataFrame([{k:v for k,v in p.items() if k not in ['g_data', 'arr', 'learned', 'travel_time', 'duration', 'NOTE_SESSION', 'tasks_completed']}]).T, use_container_width=True)
 
             if 'tasks_completed' not in p: p['tasks_completed'] = []
@@ -381,7 +403,6 @@ if ws:
                     st.markdown("**📋 Checklist:**")
                     for t_idx, task in enumerate(task_list):
                         chk_key = f"chk_{i}_{t_idx}_{p[c_nom]}"
-                        # QUI LA MODIFICA: SOLO MEMORIA LOCALE, NIENTE AGGIORNAMENTO GOOGLE
                         is_checked = st.checkbox(task, value=(task in p['tasks_completed']), key=chk_key)
                         
                         if is_checked and task not in p['tasks_completed']: p['tasks_completed'].append(task)
@@ -392,12 +413,16 @@ if ws:
             p['NOTE_SESSION'] = st.text_area(f"🎤 Esito Visita {p[c_nom]}:", value=p.get('NOTE_SESSION', ''), key=f"note_{i}", height=70)
             
             c1, c2, c3, c4 = st.columns(4)
-            with c1: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={p['g_data']['coords'][0]},{p['g_data']['coords'][1]}&travelmode=driving", use_container_width=True)
+            with c1: 
+                # Naviga solo se coordinate valide
+                if p['g_data']['found']:
+                    st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={p['g_data']['coords'][0]},{p['g_data']['coords'][1]}&travelmode=driving", use_container_width=True)
+                else:
+                    st.button("🚫 NO GPS", disabled=True, use_container_width=True)
             with c2: 
                 if tel_display: st.link_button("📞 CHIAMA", f"tel:{tel_display}", use_container_width=True)
                 else: st.button("🚫 NO TEL", disabled=True, use_container_width=True)
             with c3:
-                # TASTO SALVA PARZIALE (QUESTO SCRIVE SU GOOGLE)
                 if st.button("💾 SALVA PARZIALE", key=f"save_{i}", use_container_width=True):
                     st.session_state.db_tasks[p[c_nom]] = p['tasks_completed']
                     if ws_mem: 
