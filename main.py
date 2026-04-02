@@ -30,7 +30,7 @@ st.markdown("""
     .ai-badge { font-size: 0.75rem; background-color: #334155; color: #cbd5e1; padding: 2px 8px; border-radius: 4px; }
     .forced-badge { font-size: 0.8rem; color: #fbbf24; font-weight: bold; border: 1px solid #fbbf24; padding: 2px 6px; border-radius: 4px; margin-right: 10px;}
     .prem-badge { font-size: 0.8rem; color: #a855f7; font-weight: bold; border: 1px solid #a855f7; padding: 2px 6px; border-radius: 4px; margin-right: 5px;}
-    .task-badge { font-size: 0.8rem; color: #f43f5e; font-weight: bold; border: 1px solid #f43f5e; padding: 2px 6px; border-radius: 4px; margin-right: 5px;}
+    .task-badge { font-size: 0.8rem; color: #34d399; font-weight: bold; border: 1px solid #34d399; padding: 2px 6px; border-radius: 4px; margin-right: 5px;}
     .stCheckbox label { color: #e2e8f0 !important; font-weight: 500; }
     .stButton button { width: 100%; border-radius: 8px; font-weight: bold; transition: all 0.2s; }
     </style>
@@ -42,7 +42,7 @@ API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
 
 # ==============================================================================
 # 👇 MODIFICA SOLO QUI SOTTO CON IL TUO ID FOGLIO GOOGLE 👇
-ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
+ID_DEL_FOGLIO = "https://docs.google.com/spreadsheets/d/1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0/edit?gid=0#gid=0" 
 # ==============================================================================
 
 @st.cache_resource
@@ -223,7 +223,6 @@ else:
             st.session_state.master_route = rotta_salvata
             st.toast("🔄 Giro Ripristinato", icon="💾")
     
-    # IMPORTANTE: Carica SEMPRE lo storico da MEMORIA_GIRO all'avvio
     if 'db_tasks' not in st.session_state and ws_mem:
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
@@ -256,15 +255,26 @@ else:
                     loc_data = get_google_data([indirizzo_start])
                     if loc_data and loc_data['found']: start_coords = loc_data['coords']
             
+            # --- 1. FILTRI BASE ---
             mask_standard = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
             if sel_zona: mask_standard &= df[c_com].isin(sel_zona)
             if sel_cap: mask_standard &= df[c_cap].isin(sel_cap)
             if only_premium and c_prem: mask_standard &= df[c_prem].astype(str).str.upper().str.contains('SI', na=False)
 
+            # --- 2. FILTRO ASSOLUTO "CG FATTO" ---
+            # Trova tutti i clienti che nella MEMORIA_GIRO hanno la scritta "CG" tra le attività spuntate
+            clienti_cg_completato = []
+            for nome_cliente, tasks_fatti in st.session_state.db_tasks.items():
+                if any("CG" in str(t).upper() for t in tasks_fatti):
+                    clienti_cg_completato.append(nome_cliente)
+            
+            # Esclude i clienti che hanno già spuntato "CG" dalla ricerca
+            mask_standard &= ~df[c_nom].isin(clienti_cg_completato)
+
             df_final = pd.concat([df[df[c_nom].isin(sel_forced)], df[mask_standard]]).drop_duplicates(subset=[c_nom])
             raw = df_final.to_dict('records')
             
-            if not raw: st.warning("Nessun cliente trovato.")
+            if not raw: st.warning("Nessun cliente trovato (Tutti completati o filtri troppo stringenti).")
             else:
                 prog_bar = st.progress(0, text="Ricerca Indirizzi...")
                 pool_pronta = []
@@ -295,21 +305,14 @@ else:
                             
                             score = dist_air
                             
-                            # 1. VIP (Forzature) - Priority MAX
+                            # VIP (Forzature) - Priority MAX
                             if p[c_nom] in sel_forced: score -= 100000000 
                             
-                            # 2. LOGICA CD (DA MEMORIA_GIRO)
-                            # Cerco se nel foglio MEMORIA_GIRO (colonna E) c'è "CD"
-                            storico_tasks = st.session_state.db_tasks.get(p[c_nom], [])
-                            storico_str = str(storico_tasks).upper()
-                            
-                            # Se "CD" NON c'è scritto -> Priorità MASSIMA (Passa avanti a tutti gli altri)
-                            if "CD" not in storico_str:
-                                score -= 50000000 
-                            # Se "CD" C'È scritto -> Nessun bonus, rimane indietro.
-                            
-                            # 3. Premium
+                            # Premium
                             if c_prem and p.get(c_prem) == 'SI': score -= 2000 
+                            
+                            # Un piccolo bonus per chi ha delle attività assegnate in Excel (che non siano CG fatto, essendo già escluso)
+                            if c_att and p.get(c_att) and str(p[c_att]).strip(): score -= 5000
                             
                             if score < best_score: best_score, best = score, p
                         
@@ -343,14 +346,9 @@ else:
             forced_html = "<span class='forced-badge'>⭐ VIP</span>" if p[c_nom] in sel_forced else ""
             prem_html = "<span class='prem-badge'>💎 PREMIUM</span>" if c_prem and p.get(c_prem) == 'SI' else ""
             
-            # Badge Visivo basato su MEMORIA_GIRO
-            storico_tasks = st.session_state.db_tasks.get(p[c_nom], [])
-            storico_str = str(storico_tasks).upper()
-            has_cd = "CD" in storico_str
-            
-            task_badge_html = ""
-            if has_cd:
-                task_badge_html = "<span class='task-badge'>⚠️ CD GIÀ FATTO</span>"
+            # Badge Visivo per le Attività
+            has_tasks = c_att and p.get(c_att) and str(p[c_att]).strip()
+            task_badge_html = "<span class='task-badge'>📋 ATTIVITÀ</span>" if has_tasks else ""
 
             canvass_html = ""
             valore_canvass = p.get(c_canv, '') if c_canv else ''
@@ -377,6 +375,11 @@ else:
                 candidates_df = df[~df[c_nom].isin(clienti_nel_giro)]
                 if sel_zona: candidates_df = candidates_df[candidates_df[c_com].isin(sel_zona)]
                 if sel_cap: candidates_df = candidates_df[candidates_df[c_cap].isin(sel_cap)]
+                
+                # Applica il filtro anche ai candidati per la sostituzione: No clienti "CG Fatto"
+                clienti_cg_completato = [c for c, tasks in st.session_state.db_tasks.items() if any("CG" in str(t).upper() for t in tasks)]
+                candidates_df = candidates_df[~candidates_df[c_nom].isin(clienti_cg_completato)]
+                
                 candidati_sostituzione = sorted(candidates_df[c_nom].unique().tolist())
                 with col_swap_1: nuovo_cliente_nome = st.selectbox(f"Scegli sostituto:", ["- Seleziona -"] + candidati_sostituzione, key=f"sel_swap_{i}")
                 with col_swap_2:
