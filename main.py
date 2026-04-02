@@ -116,7 +116,7 @@ API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
 
 # ==============================================================================
 # 👇 MODIFICA SOLO QUI SOTTO CON IL TUO ID FOGLIO GOOGLE 👇
-ID_DEL_FOGLIO = "https://docs.google.com/spreadsheets/d/1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0/edit?gid=0#gid=0" 
+ID_DEL_FOGLIO = "https://docs.google.com/spreadsheets/d/1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0/edit?gid=0#gid=0"
 # ==============================================================================
 
 @st.cache_resource
