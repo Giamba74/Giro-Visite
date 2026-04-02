@@ -116,7 +116,7 @@ API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
 
 # ==============================================================================
 # 👇 MODIFICA SOLO QUI SOTTO CON IL TUO ID FOGLIO GOOGLE 👇
-ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
+ID_DEL_FOGLIO = "IL_TUO_ID_QUI" 
 # ==============================================================================
 
 @st.cache_resource
@@ -304,7 +304,10 @@ else:
     with st.sidebar:
         st.markdown("<h2 style='text-align: center; color: #38bdf8; margin-bottom: 20px;'>⚙️ Settings</h2>", unsafe_allow_html=True)
         indirizzo_start = st.text_input("📍 Luogo di Partenza:", value="Chianti, Sede")
-        num_visite = st.slider("🚗 Clienti da visitare:", 1, 15, 8)
+        
+        # 👇 QUI HO MODIFICATO IL VALORE MASSIMO A 25 👇
+        num_visite = st.slider("🚗 Clienti da visitare:", 1, 25, 8)
+        
         st.divider()
         only_premium = st.toggle("💎 Mostra solo PREMIUM", value=False)
         sel_zona = st.multiselect("🌍 Filtra per Zona (Comuni)", sorted(df[c_com].unique()))
@@ -384,7 +387,6 @@ else:
                             if c_att and p.get(c_att) and str(p[c_att]).strip(): score -= 5000
                             
                             # --- LOGICA ANTI-CD DA MEMORIA GIRO ---
-                            # Se NON ha ancora completato CD (in Memoria Giro), ha precedenza altissima.
                             storico_tasks = st.session_state.db_tasks.get(p[c_nom], [])
                             if "CD" not in str(storico_tasks).upper():
                                 score -= 50000000
@@ -433,7 +435,7 @@ else:
             
             st.code(hud_text, language="markdown")
             
-        st.markdown("<br>", unsafe_allow_html=True) # Spazio per separare l'expander dal resto
+        st.markdown("<br>", unsafe_allow_html=True) 
         
         for i, p in enumerate(route):
             ai_lbl = "AI" if p.get('learned') else "Std"
@@ -448,7 +450,6 @@ else:
             forced_html = "<span class='badge forced-badge'>⭐ VIP</span>" if p[c_nom] in sel_forced else ""
             prem_html = "<span class='badge prem-badge'>💎 PREMIUM</span>" if c_prem and p.get(c_prem) == 'SI' else ""
             
-            # --- CREAZIONE DEL BADGE SOLO SE CD E' STATO FATTO NEL MEMORIA_GIRO ---
             storico_tasks = st.session_state.db_tasks.get(p[c_nom], [])
             has_cd_fatto = any("CD" in str(t).upper() for t in storico_tasks)
             task_badge_html = "<span class='badge done-badge'>✅ CD COMPLETATO</span>" if has_cd_fatto else ""
