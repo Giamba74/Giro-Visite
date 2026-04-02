@@ -262,13 +262,11 @@ else:
             if only_premium and c_prem: mask_standard &= df[c_prem].astype(str).str.upper().str.contains('SI', na=False)
 
             # --- 2. FILTRO ASSOLUTO "CG FATTO" ---
-            # Trova tutti i clienti che nella MEMORIA_GIRO hanno la scritta "CG" tra le attività spuntate
             clienti_cg_completato = []
             for nome_cliente, tasks_fatti in st.session_state.db_tasks.items():
                 if any("CG" in str(t).upper() for t in tasks_fatti):
                     clienti_cg_completato.append(nome_cliente)
             
-            # Esclude i clienti che hanno già spuntato "CG" dalla ricerca
             mask_standard &= ~df[c_nom].isin(clienti_cg_completato)
 
             df_final = pd.concat([df[df[c_nom].isin(sel_forced)], df[mask_standard]]).drop_duplicates(subset=[c_nom])
@@ -305,13 +303,8 @@ else:
                             
                             score = dist_air
                             
-                            # VIP (Forzature) - Priority MAX
                             if p[c_nom] in sel_forced: score -= 100000000 
-                            
-                            # Premium
                             if c_prem and p.get(c_prem) == 'SI': score -= 2000 
-                            
-                            # Un piccolo bonus per chi ha delle attività assegnate in Excel (che non siano CG fatto, essendo già escluso)
                             if c_att and p.get(c_att) and str(p[c_att]).strip(): score -= 5000
                             
                             if score < best_score: best_score, best = score, p
@@ -346,7 +339,6 @@ else:
             forced_html = "<span class='forced-badge'>⭐ VIP</span>" if p[c_nom] in sel_forced else ""
             prem_html = "<span class='prem-badge'>💎 PREMIUM</span>" if c_prem and p.get(c_prem) == 'SI' else ""
             
-            # Badge Visivo per le Attività
             has_tasks = c_att and p.get(c_att) and str(p[c_att]).strip()
             task_badge_html = "<span class='task-badge'>📋 ATTIVITÀ</span>" if has_tasks else ""
 
@@ -376,7 +368,6 @@ else:
                 if sel_zona: candidates_df = candidates_df[candidates_df[c_com].isin(sel_zona)]
                 if sel_cap: candidates_df = candidates_df[candidates_df[c_cap].isin(sel_cap)]
                 
-                # Applica il filtro anche ai candidati per la sostituzione: No clienti "CG Fatto"
                 clienti_cg_completato = [c for c, tasks in st.session_state.db_tasks.items() if any("CG" in str(t).upper() for t in tasks)]
                 candidates_df = candidates_df[~candidates_df[c_nom].isin(clienti_cg_completato)]
                 
@@ -428,11 +419,18 @@ else:
                 label_btn = "✅ CONCLUDI" if len(tasks_done) >= tasks_total else "⚠️ CHIUDI"
                 if st.button(label_btn, key=f"d_{i}", type=colore_btn, use_container_width=True):
                     try:
-                        ws.update_cell(ws.find(p[c_nom]).row, list(df.columns).index(c_vis)+1, "SI")
-                        report_extra = (f"[ATTIVITÀ: {', '.join(tasks_done)} su {tasks_total}] " if tasks_total > 0 else "") + (f"[NOTE: {p['NOTE_SESSION']}]" if p['NOTE_SESSION'] else "")
-                        log_visit(ws_ai, p[c_nom], p['duration'], report_extra)
+                        # METODO SICURO PER TROVARE LA RIGA SENZA ERRORI DI CELLNOTFOUND
+                        riga_cliente = df.index[df[c_nom] == p[c_nom]].tolist()[0] + 2
+                        col_visita = list(df.columns).index(c_vis) + 1
+                        
+                        ws.update_cell(riga_cliente, col_visita, "SI")
+                        
+                        report_extra = (f"[ATTIVITÀ: {', '.join(tasks_done)}] " if tasks_done else "") + (f"[NOTE: {p.get('NOTE_SESSION', '')}]" if p.get('NOTE_SESSION') else "")
+                        log_visit(ws_ai, p[c_nom], p.get('duration', 20), report_extra)
+                        
                         if ws_mem: pulisci_attivita_cliente(ws_mem, p[c_nom])
                         st.session_state.master_route.pop(i)
                         if ws_mem: salva_giro_solo_rotta(ws_mem, st.session_state.master_route)
                         st.rerun()
-                    except: st.error("Errore Salvataggio")
+                    except Exception as e: 
+                        st.error(f"Errore tecnico nel salvataggio: {e}")
