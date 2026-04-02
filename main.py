@@ -116,7 +116,7 @@ API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
 
 # ==============================================================================
 # 👇 MODIFICA SOLO QUI SOTTO CON IL TUO ID FOGLIO GOOGLE 👇
-ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0"
+ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
 # ==============================================================================
 
 @st.cache_resource
@@ -132,6 +132,7 @@ def connect_db():
         ws_mem = None
         if "MEMORIA_GIRO" in [w.title for w in sh.worksheets()]:
              ws_mem = sh.worksheet("MEMORIA_GIRO")
+             # Inizializza Headers se vuoto
              if not ws_mem.acell("A1").value:
                  ws_mem.update_acell("A1", "DATA"); ws_mem.update_acell("B1", "JSON_DATA")
                  ws_mem.update_acell("D1", "DB_CLIENTE"); ws_mem.update_acell("E1", "DB_TASKS")
@@ -330,14 +331,20 @@ else:
                     loc_data = get_google_data([indirizzo_start])
                     if loc_data and loc_data['found']: start_coords = loc_data['coords']
             
+            # --- 1. FILTRI BASE ---
             mask_standard = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
             if sel_zona: mask_standard &= df[c_com].isin(sel_zona)
             if sel_cap: mask_standard &= df[c_cap].isin(sel_cap)
             if only_premium and c_prem: mask_standard &= df[c_prem].astype(str).str.upper().str.contains('SI', na=False)
 
-            # Filtro esclusione per CD (Se vuoi escludere anche chi l'ha già fatto, lasciamo questo blocco vuoto per coerenza con l'ordinamento. 
-            # In base alla tua richiesta, se CD è presente in Excel li mettiamo in fondo).
+            # --- 2. FILTRO ESCLUSIONE CG COMPLETATO ---
+            clienti_cg_completato = []
+            for nome_cliente, tasks_fatti in st.session_state.db_tasks.items():
+                if any("CG" in str(t).upper() for t in tasks_fatti):
+                    clienti_cg_completato.append(nome_cliente)
             
+            mask_standard &= ~df[c_nom].isin(clienti_cg_completato)
+
             df_final = pd.concat([df[df[c_nom].isin(sel_forced)], df[mask_standard]]).drop_duplicates(subset=[c_nom])
             raw = df_final.to_dict('records')
             
@@ -374,11 +381,13 @@ else:
                             
                             if p[c_nom] in sel_forced: score -= 100000000 
                             if c_prem and p.get(c_prem) == 'SI': score -= 2000 
+                            if c_att and p.get(c_att) and str(p[c_att]).strip(): score -= 5000
                             
-                            # --- LOGICA ANTI-CD: CHI NON HA "CD" VINCE ---
-                            txt_attivita = str(p.get(c_att, '')).upper()
-                            if "CD" not in txt_attivita: 
-                                score -= 50000000 # Priorità Massima
+                            # --- LOGICA ANTI-CD DA MEMORIA GIRO ---
+                            # Se NON ha ancora completato CD (in Memoria Giro), ha precedenza altissima.
+                            storico_tasks = st.session_state.db_tasks.get(p[c_nom], [])
+                            if "CD" not in str(storico_tasks).upper():
+                                score -= 50000000
                             
                             if score < best_score: best_score, best = score, p
                         
@@ -439,9 +448,10 @@ else:
             forced_html = "<span class='badge forced-badge'>⭐ VIP</span>" if p[c_nom] in sel_forced else ""
             prem_html = "<span class='badge prem-badge'>💎 PREMIUM</span>" if c_prem and p.get(c_prem) == 'SI' else ""
             
-            txt_att = str(p.get(c_att, '')).upper()
-            has_cd = "CD" in txt_att
-            task_badge_html = "<span class='badge done-badge'>✅ CD COMPLETATO</span>" if has_cd else ""
+            # --- CREAZIONE DEL BADGE SOLO SE CD E' STATO FATTO NEL MEMORIA_GIRO ---
+            storico_tasks = st.session_state.db_tasks.get(p[c_nom], [])
+            has_cd_fatto = any("CD" in str(t).upper() for t in storico_tasks)
+            task_badge_html = "<span class='badge done-badge'>✅ CD COMPLETATO</span>" if has_cd_fatto else ""
 
             canvass_html = ""
             valore_canvass = p.get(c_canv, '') if c_canv else ''
@@ -469,6 +479,9 @@ else:
                 candidates_df = df[~df[c_nom].isin(clienti_nel_giro)]
                 if sel_zona: candidates_df = candidates_df[candidates_df[c_com].isin(sel_zona)]
                 if sel_cap: candidates_df = candidates_df[candidates_df[c_cap].isin(sel_cap)]
+                
+                clienti_cg_completato = [c for c, tasks in st.session_state.db_tasks.items() if any("CG" in str(t).upper() for t in tasks)]
+                candidates_df = candidates_df[~candidates_df[c_nom].isin(clienti_cg_completato)]
                 
                 candidati_sostituzione = sorted(candidates_df[c_nom].unique().tolist())
                 with col_swap_1: nuovo_cliente_nome = st.selectbox(f"Seleziona cliente alternativo:", ["- Scegli -"] + candidati_sostituzione, key=f"sel_swap_{i}")
@@ -521,6 +534,7 @@ else:
                     try:
                         riga_cliente = df.index[df[c_nom] == p[c_nom]].tolist()[0] + 2
                         col_visita = list(df.columns).index(c_vis) + 1
+                        
                         ws.update_cell(riga_cliente, col_visita, "SI")
                         
                         report_extra = (f"[ATTIVITÀ: {', '.join(tasks_done)}] " if tasks_done else "") + (f"[NOTE: {p.get('NOTE_SESSION', '')}]" if p.get('NOTE_SESSION') else "")
