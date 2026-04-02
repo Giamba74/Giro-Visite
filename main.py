@@ -16,23 +16,105 @@ import time
 st.set_page_config(page_title="Brightstar CRM PRO", page_icon="💎", layout="wide")
 TZ_ITALY = pytz.timezone('Europe/Rome')
 
+# --- 🎨 NUOVO DESIGN E STILE CSS ---
 st.markdown("""
     <style>
-    .stApp { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); font-family: 'Segoe UI', sans-serif; color: #e2e8f0; }
-    .client-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px; padding: 20px; margin-bottom: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
-    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 10px; }
-    .client-name { font-size: 1.4rem; font-weight: 700; color: #f8fafc; }
-    .arrival-time { background: linear-gradient(90deg, #3b82f6, #2563eb); color: white; padding: 4px 12px; border-radius: 20px; font-weight: bold; }
-    .strategy-box { padding: 10px; border-radius: 8px; margin-bottom: 15px; font-size: 0.9em; color: white; border-left: 4px solid; background: rgba(0,0,0,0.2); }
-    .info-row { display: flex; gap: 15px; color: #94a3b8; font-size: 0.9rem; margin-bottom: 5px; }
-    .highlight { color: #38bdf8; font-weight: 600; }
-    .real-traffic { color: #f59e0b; font-size: 0.8rem; font-style: italic; }
-    .ai-badge { font-size: 0.75rem; background-color: #334155; color: #cbd5e1; padding: 2px 8px; border-radius: 4px; }
-    .forced-badge { font-size: 0.8rem; color: #fbbf24; font-weight: bold; border: 1px solid #fbbf24; padding: 2px 6px; border-radius: 4px; margin-right: 10px;}
-    .prem-badge { font-size: 0.8rem; color: #a855f7; font-weight: bold; border: 1px solid #a855f7; padding: 2px 6px; border-radius: 4px; margin-right: 5px;}
-    .task-badge { font-size: 0.8rem; color: #34d399; font-weight: bold; border: 1px solid #34d399; padding: 2px 6px; border-radius: 4px; margin-right: 5px;}
-    .stCheckbox label { color: #e2e8f0 !important; font-weight: 500; }
-    .stButton button { width: 100%; border-radius: 8px; font-weight: bold; transition: all 0.2s; }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    
+    .stApp { 
+        font-family: 'Inter', sans-serif; 
+        background: radial-gradient(circle at top left, #1e293b 0%, #0f172a 100%); 
+        color: #f1f5f9; 
+    }
+    
+    /* Intestazione App */
+    .app-header {
+        background: linear-gradient(90deg, #2563eb, #8b5cf6);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-size: 2.5rem;
+        font-weight: 800;
+        text-align: center;
+        margin-bottom: 30px;
+        letter-spacing: -1px;
+        text-shadow: 0px 4px 20px rgba(37, 99, 235, 0.2);
+    }
+
+    /* Schede Clienti */
+    .client-card { 
+        background: linear-gradient(145deg, rgba(30, 41, 59, 0.85), rgba(15, 23, 42, 0.9)); 
+        backdrop-filter: blur(12px); 
+        border: 1px solid rgba(255, 255, 255, 0.08); 
+        border-radius: 20px; 
+        padding: 24px; 
+        margin-bottom: 16px; 
+        box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5); 
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .client-card:hover {
+        transform: translateY(-4px) scale(1.01);
+        box-shadow: 0 20px 40px -10px rgba(59, 130, 246, 0.25);
+        border-color: rgba(59, 130, 246, 0.3);
+    }
+    
+    /* Testi dentro la scheda */
+    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 12px; }
+    .client-name { font-size: 1.45rem; font-weight: 800; color: #ffffff; letter-spacing: -0.5px; }
+    .arrival-time { 
+        background: linear-gradient(135deg, #3b82f6, #6366f1); 
+        color: white; 
+        padding: 6px 16px; 
+        border-radius: 30px; 
+        font-weight: 700; 
+        font-size: 1.1rem;
+        box-shadow: 0 4px 10px rgba(59, 130, 246, 0.3);
+    }
+    
+    /* Box Strategia */
+    .strategy-box { 
+        padding: 12px 16px; 
+        border-radius: 10px; 
+        margin-bottom: 18px; 
+        font-size: 0.95em; 
+        color: #e2e8f0; 
+        border-left: 5px solid; 
+        background: rgba(0,0,0,0.25); 
+        font-weight: 500;
+    }
+    
+    .info-row { display: flex; gap: 15px; color: #94a3b8; font-size: 0.95rem; margin-bottom: 8px; font-weight: 500;}
+    .highlight { color: #38bdf8; font-weight: 700; }
+    .real-traffic { color: #fbbf24; font-size: 0.85rem; font-style: normal; font-weight: 600; background: rgba(251, 191, 36, 0.1); padding: 2px 8px; border-radius: 6px;}
+    .ai-badge { font-size: 0.8rem; background-color: rgba(51, 65, 85, 0.8); color: #cbd5e1; padding: 3px 10px; border-radius: 6px; font-weight: 600;}
+    
+    /* Badge Speciali */
+    .badge { padding: 4px 10px; border-radius: 8px; margin-right: 8px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; display: inline-block; margin-bottom: 5px;}
+    .forced-badge { background: rgba(251, 191, 36, 0.15); color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.4); }
+    .prem-badge { background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4); }
+    .task-badge { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
+    .done-badge { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); }
+    
+    /* Bottoni */
+    div[data-testid="stButton"] button { 
+        border-radius: 12px; 
+        font-weight: 700; 
+        transition: all 0.2s ease; 
+        border: none !important;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        padding: 10px 0;
+    }
+    div[data-testid="stButton"] button:hover { transform: scale(1.03) translateY(-2px); box-shadow: 0 8px 15px rgba(0,0,0,0.3); }
+    div[data-testid="stButton"] button:active { transform: scale(0.98); }
+    
+    /* Checkbox & Testi */
+    .stCheckbox label { color: #f8fafc !important; font-weight: 600; }
+    .stTextArea textarea { border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); background: rgba(15,23,42,0.6); color: white;}
+    .stTextArea textarea:focus { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,0.2);}
+    
+    /* Expander Sostituisci */
+    .streamlit-expanderHeader { background-color: rgba(255,255,255,0.03) !important; color: #94a3b8 !important; border-radius: 12px; font-weight: 600;}
+    .streamlit-expanderHeader:hover { color: white !important; background-color: rgba(255,255,255,0.08) !important;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -42,7 +124,7 @@ API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
 
 # ==============================================================================
 # 👇 MODIFICA SOLO QUI SOTTO CON IL TUO ID FOGLIO GOOGLE 👇
-ID_DEL_FOGLIO = "https://docs.google.com/spreadsheets/d/1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0/edit?gid=0#gid=0" 
+ID_DEL_FOGLIO = "IL_TUO_ID_QUI" 
 # ==============================================================================
 
 @st.cache_resource
@@ -66,7 +148,7 @@ def connect_db():
         return ws_main, ws_log, ws_mem
     except: return None, None, None
 
-# --- SALVATAGGIO ROBUSTO ---
+# --- SALVATAGGIO ---
 def salva_giro_solo_rotta(sh_memoria, rotta_data):
     try:
         dati_export = copy.deepcopy(rotta_data)
@@ -184,21 +266,21 @@ def log_visit(ws_log, cliente, durata, note_extra=""):
         ws_log.append_row([cliente, now.strftime("%d-%m-%Y"), now.strftime("%H:%M"), durata, note_extra])
 
 def agente_strategico(note_precedenti):
-    if not note_precedenti: return "ℹ️ COACH: Nessuno storico recente.", "border-left-color: #64748b;"
+    if not note_precedenti: return "ℹ️ COACH: Nessuno storico recente.", "border-left-color: #475569;"
     txt = str(note_precedenti).lower()
     if any(x in txt for x in ['arrabbiato', 'reclamo', 'ritardo']):
-        return "🛡️ COACH: Cliente a rischio.", "border-left-color: #f87171; background: rgba(153, 27, 27, 0.2);"
+        return "🛡️ COACH: Cliente a rischio. Focus su ascolto attivo.", "border-left-color: #ef4444; background: rgba(239, 68, 68, 0.15);"
     if any(x in txt for x in ['prezzo', 'costoso', 'sconto']):
-        return "💎 COACH: Difendi il valore.", "border-left-color: #fb923c; background: rgba(146, 64, 14, 0.2);"
+        return "💎 COACH: Difendi il valore. Prepara argomenti su ROI.", "border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.15);"
     if any(x in txt for x in ['interessato', 'preventivo']):
-        return "🎯 COACH: È caldo!", "border-left-color: #4ade80; background: rgba(22, 101, 52, 0.2);"
-    return f"ℹ️ MEMO: {note_precedenti[:50]}...", "border-left-color: #94a3b8;"
+        return "🎯 COACH: È caldo! Punta alla chiusura oggi.", "border-left-color: #10b981; background: rgba(16, 185, 129, 0.15);"
+    return f"ℹ️ MEMO: {note_precedenti[:60]}...", "border-left-color: #3b82f6;"
 
 # --- APP START ---
 try: ws, ws_ai, ws_mem = connect_db()
 except: ws, ws_ai, ws_mem = None, None, None
 
-if ws is None: st.error("❌ Errore Connessione DB.")
+if ws is None: st.error("❌ Errore Connessione al Database di Google Sheets.")
 else:
     data = ws.get_all_values()
     df = pd.DataFrame(data[1:], columns=[h.strip().upper() for h in data[0]])
@@ -226,42 +308,43 @@ else:
     if 'db_tasks' not in st.session_state and ws_mem:
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
+    # --- SIDEBAR DESIGN ---
     with st.sidebar:
-        st.title("💼 CRM Filters")
-        indirizzo_start = st.text_input("📍 Partenza:", value="Chianti, Sede")
+        st.markdown("<h2 style='text-align: center; color: #38bdf8; margin-bottom: 20px;'>⚙️ Settings</h2>", unsafe_allow_html=True)
+        indirizzo_start = st.text_input("📍 Luogo di Partenza:", value="Chianti, Sede")
+        num_visite = st.slider("🚗 Clienti da visitare:", 1, 15, 8)
         st.divider()
-        num_visite = st.slider("Numero visite:", 1, 15, 8)
-        only_premium = st.toggle("💎 Solo Clienti PREMIUM", value=True)
-        sel_zona = st.multiselect("Zona", sorted(df[c_com].unique()))
-        sel_cap = st.multiselect("CAP", sorted(df[c_cap].unique()) if c_cap in df.columns else [])
+        only_premium = st.toggle("💎 Mostra solo PREMIUM", value=False)
+        sel_zona = st.multiselect("🌍 Filtra per Zona (Comuni)", sorted(df[c_com].unique()))
+        sel_cap = st.multiselect("📮 Filtra per CAP", sorted(df[c_cap].unique()) if c_cap in df.columns else [])
         st.divider()
-        st.markdown("### ⭐ Forzature (VIP)")
+        st.markdown("#### ⭐ Forzature (Clienti VIP)")
         all_clients_list = sorted(df[c_nom].unique().tolist())
-        sel_forced = st.multiselect("Clienti Prioritari:", all_clients_list)
+        sel_forced = st.multiselect("Seleziona manualmente i clienti:", all_clients_list)
         st.divider()
-        if st.button("🗑️ RESETTA GIRO", type="secondary"):
+        if st.button("🗑️ SVUOTA MEMORIA GIRO", type="secondary"):
              if ws_mem: resetta_solo_rotta(ws_mem)
              if 'master_route' in st.session_state: del st.session_state.master_route
              st.rerun()
 
-    st.markdown("### 🚀 Brightstar CRM Dashboard")
+    # --- TITOLO PRINCIPALE ---
+    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO</div>", unsafe_allow_html=True)
 
-    if st.button("CALCOLA NUOVO GIRO", type="primary", use_container_width=True):
-        if not ws_mem: st.error("Errore: Manca foglio MEMORIA_GIRO!")
+    if st.button("🔄 CALCOLA NUOVO GIRO OTTIMIZZATO", type="primary", use_container_width=True):
+        if not ws_mem: st.error("Errore: Manca il foglio MEMORIA_GIRO su Google Sheets!")
         else:
             start_coords = SEDE_COORDS
             if indirizzo_start:
-                with st.spinner(f"🔍 Cerco: {indirizzo_start}..."):
+                with st.spinner(f"🔍 Geolocalizzazione in corso per: {indirizzo_start}..."):
                     loc_data = get_google_data([indirizzo_start])
                     if loc_data and loc_data['found']: start_coords = loc_data['coords']
             
-            # --- 1. FILTRI BASE ---
             mask_standard = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
             if sel_zona: mask_standard &= df[c_com].isin(sel_zona)
             if sel_cap: mask_standard &= df[c_cap].isin(sel_cap)
             if only_premium and c_prem: mask_standard &= df[c_prem].astype(str).str.upper().str.contains('SI', na=False)
 
-            # --- 2. FILTRO ASSOLUTO "CG FATTO" ---
+            # Filtro esclusione definitiva per CG Fatto
             clienti_cg_completato = []
             for nome_cliente, tasks_fatti in st.session_state.db_tasks.items():
                 if any("CG" in str(t).upper() for t in tasks_fatti):
@@ -272,14 +355,14 @@ else:
             df_final = pd.concat([df[df[c_nom].isin(sel_forced)], df[mask_standard]]).drop_duplicates(subset=[c_nom])
             raw = df_final.to_dict('records')
             
-            if not raw: st.warning("Nessun cliente trovato (Tutti completati o filtri troppo stringenti).")
+            if not raw: st.warning("🎯 Nessun cliente trovato (Tutti completati o filtri troppo stringenti).")
             else:
-                prog_bar = st.progress(0, text="Ricerca Indirizzi...")
+                prog_bar = st.progress(0, text="Ricerca Indirizzi su Google Maps...")
                 pool_pronta = []
                 total = len(raw)
                 
                 for i, p in enumerate(raw):
-                    prog_bar.progress((i + 1) / total, text=f"🔍 Analisi: {p[c_nom]}")
+                    prog_bar.progress((i + 1) / total, text=f"🔍 Mappatura: {p[c_nom]}")
                     if 'g_data' not in p:
                         res = get_google_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_nom]}, {p[c_com]}"])
                         if res and res['found']: p['g_data'] = res
@@ -287,14 +370,14 @@ else:
                     pool_pronta.append(p)
                 prog_bar.empty()
 
-                with st.spinner("⏳ Ordinamento..."):
+                with st.spinner("⏳ Intelligenza Artificiale: Creazione rotta ottimale..."):
                     rotta = []
                     now = datetime.now(TZ_ITALY)
-                    start_t = now if (7 <= now.hour < 19) else now.replace(hour=7, minute=30) + timedelta(days=(1 if now.hour>=19 else 0))
-                    limit = start_t.replace(hour=19, minute=30)
-                    curr_t, curr_loc, pool = start_t, start_coords, pool_pronta.copy()
+                    curr_t = now.replace(hour=8, minute=0) if now.hour >= 19 else now
+                    curr_loc = start_coords
+                    pool = pool_pronta.copy()
 
-                    while pool and curr_t < limit and len(rotta) < num_visite:
+                    while pool and len(rotta) < num_visite:
                         best = None; best_score = float('inf')
                         for p in pool:
                             c_target = p['g_data']['coords'] if p['g_data']['coords'] else curr_loc
@@ -313,19 +396,24 @@ else:
                             c_best = best['g_data']['coords'] if best['g_data']['coords'] else curr_loc
                             real_mins = get_real_travel_time(curr_loc, c_best)
                             arrival_real = curr_t + timedelta(minutes=real_mins)
-                            if arrival_real > limit: pool.remove(best); continue
+                            
                             dur_visita, learned = get_ai_duration(ws_ai, best[c_nom])
                             best['arr'], best['travel_time'], best['duration'], best['learned'] = arrival_real, real_mins, dur_visita, learned
                             best['tasks_completed'] = st.session_state.db_tasks.get(best[c_nom], [])
-                            rotta.append(best); curr_t = arrival_real + timedelta(minutes=dur_visita); curr_loc = c_best; pool.remove(best)
+                            
+                            rotta.append(best)
+                            curr_t = arrival_real + timedelta(minutes=dur_visita)
+                            curr_loc = c_best
+                            pool.remove(best)
                         else: break
+                        
                     st.session_state.master_route = rotta
                     if ws_mem: salva_giro_solo_rotta(ws_mem, rotta)
                     st.rerun()
 
     if 'master_route' in st.session_state:
         route = st.session_state.master_route
-        st.caption(f"🏁 Rientro: {route[-1]['arr'].strftime('%H:%M') if route else '--:--'}")
+        st.markdown(f"<p style='text-align:center; color:#94a3b8; font-weight:600;'>🏁 Orario Rientro Stimato: <span style='color:#38bdf8'>{route[-1]['arr'].strftime('%H:%M') if route else '--:--'}</span></p>", unsafe_allow_html=True)
         
         for i, p in enumerate(route):
             ai_lbl = "AI" if p.get('learned') else "Std"
@@ -336,32 +424,34 @@ else:
             ora_str = p['arr'].strftime('%H:%M')
             note_old = p.get(c_note_sto, '') if c_note_sto else ''
             msg_coach, style_coach = agente_strategico(note_old)
-            forced_html = "<span class='forced-badge'>⭐ VIP</span>" if p[c_nom] in sel_forced else ""
-            prem_html = "<span class='prem-badge'>💎 PREMIUM</span>" if c_prem and p.get(c_prem) == 'SI' else ""
+            
+            forced_html = "<span class='badge forced-badge'>⭐ VIP</span>" if p[c_nom] in sel_forced else ""
+            prem_html = "<span class='badge prem-badge'>💎 PREMIUM</span>" if c_prem and p.get(c_prem) == 'SI' else ""
             
             has_tasks = c_att and p.get(c_att) and str(p[c_att]).strip()
-            task_badge_html = "<span class='task-badge'>📋 ATTIVITÀ</span>" if has_tasks else ""
+            task_badge_html = "<span class='badge task-badge'>📋 ATTIVITÀ</span>" if has_tasks else ""
 
             canvass_html = ""
             valore_canvass = p.get(c_canv, '') if c_canv else ''
             if valore_canvass and str(valore_canvass).strip():
-                canvass_html = f"<div style='background:linear-gradient(90deg, #059669, #10b981); color:white; padding:10px; border-radius:8px; margin-bottom:10px; font-weight:bold; border:1px solid #34d399;'>📢 CANVASS: {valore_canvass}</div>"
+                canvass_html = f"<div style='background:linear-gradient(90deg, #059669, #10b981); color:white; padding:10px; border-radius:8px; margin-bottom:15px; font-weight:bold; border:1px solid rgba(52, 211, 153, 0.4); box-shadow: 0 4px 6px rgba(0,0,0,0.2);'>📢 CANVASS: {valore_canvass}</div>"
 
             map_status = ""
-            if not p['g_data']['found']: map_status = "<div style='color: #ef4444; font-weight:bold; margin-top:5px;'>⚠️ INDIRIZZO NON TROVATO</div>"
+            if not p['g_data']['found']: map_status = "<div style='color: #f87171; font-weight:bold; margin-top:5px; margin-bottom:10px; font-size:0.9rem;'>⚠️ GPS NON TROVATO</div>"
 
             html_card = f"""
 <div class="client-card">
-<div class="card-header"><div style="display:flex; align-items:center; flex-wrap: wrap;">{forced_html}{task_badge_html}{prem_html}<span class="client-name">{i+1}. {p[c_nom]}</span></div><div class="arrival-time">{ora_str}</div></div>
+<div class="card-header"><div style="display:flex; align-items:center; flex-wrap: wrap;">{forced_html}{task_badge_html}{prem_html}</div><div class="arrival-time">{ora_str}</div></div>
+<div style="margin-bottom: 15px;"><span class="client-name">{i+1}. {p[c_nom]}</span></div>
 {canvass_html}
 <div class="strategy-box" style="{style_coach}">{msg_coach}</div>
 {map_status}
 <div class="info-row"><span>📍 {p[c_ind]}, {p[c_com]}</span><span class="real-traffic">🚗 Guida: {p['travel_time']} min</span></div>
-<div class="info-row"><span class="ai-badge">⏱️ {p['duration']} min ({ai_lbl})</span><span class="highlight">{tel_display}</span></div>
+<div class="info-row"><span class="ai-badge">⏱️ Visita: {p['duration']} min ({ai_lbl})</span><span class="highlight">📞 {tel_display}</span></div>
 </div>"""
             st.markdown(html_card, unsafe_allow_html=True)
 
-            with st.expander("🔄 SOSTITUISCI / DATI CRM"):
+            with st.expander("🔄 SOSTITUISCI CLIENTE / DETTAGLI CRM"):
                 col_swap_1, col_swap_2 = st.columns([3, 1])
                 clienti_nel_giro = [x[c_nom] for x in route]
                 candidates_df = df[~df[c_nom].isin(clienti_nel_giro)]
@@ -372,10 +462,11 @@ else:
                 candidates_df = candidates_df[~candidates_df[c_nom].isin(clienti_cg_completato)]
                 
                 candidati_sostituzione = sorted(candidates_df[c_nom].unique().tolist())
-                with col_swap_1: nuovo_cliente_nome = st.selectbox(f"Scegli sostituto:", ["- Seleziona -"] + candidati_sostituzione, key=f"sel_swap_{i}")
+                with col_swap_1: nuovo_cliente_nome = st.selectbox(f"Seleziona cliente alternativo:", ["- Scegli -"] + candidati_sostituzione, key=f"sel_swap_{i}")
                 with col_swap_2:
-                    if st.button("SCAMBIA", key=f"btn_swap_{i}"):
-                        if nuovo_cliente_nome != "- Seleziona -":
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("🔄 SCAMBIA", key=f"btn_swap_{i}", use_container_width=True):
+                        if nuovo_cliente_nome != "- Scegli -":
                             dati_nuovo = df[df[c_nom] == nuovo_cliente_nome].to_dict('records')[0]
                             g_data_nuovo = get_google_data([f"{dati_nuovo[c_ind]}, {dati_nuovo[c_com]}, Italy", f"{dati_nuovo[c_nom]}, {dati_nuovo[c_com]}"])
                             if not g_data_nuovo or not g_data_nuovo['found']: g_data_nuovo = {'coords': SEDE_COORDS, 'found': False, 'tel': ''}
@@ -390,7 +481,7 @@ else:
             if c_att and p.get(c_att):
                 task_list = [t.strip() for t in str(p[c_att]).split(',') if t.strip()]
                 if task_list:
-                    st.markdown("**📋 Checklist:**")
+                    st.markdown("<p style='color:#e2e8f0; font-weight:600; margin-bottom:5px; margin-top:10px;'>📋 Checklist Attività:</p>", unsafe_allow_html=True)
                     for t_idx, task in enumerate(task_list):
                         chk_key = f"chk_{i}_{t_idx}_{p[c_nom]}"
                         is_checked = st.checkbox(task, value=(task in p['tasks_completed']), key=chk_key)
@@ -399,7 +490,7 @@ else:
 
             tasks_done = p.get('tasks_completed', [])
             tasks_total = len([t.strip() for t in str(p.get(c_att, '')).split(',') if t.strip()])
-            p['NOTE_SESSION'] = st.text_area(f"🎤 Esito Visita {p[c_nom]}:", value=p.get('NOTE_SESSION', ''), key=f"note_{i}", height=70)
+            p['NOTE_SESSION'] = st.text_area(f"🎤 Note Visita {p[c_nom]}:", value=p.get('NOTE_SESSION', ''), key=f"note_{i}", height=70, placeholder="Scrivi qui il resoconto della visita...")
             
             c1, c2, c3, c4 = st.columns(4)
             with c1: 
@@ -409,7 +500,7 @@ else:
                 if tel_display: st.link_button("📞 CHIAMA", f"tel:{tel_display}", use_container_width=True)
                 else: st.button("🚫 NO TEL", disabled=True, use_container_width=True)
             with c3:
-                if st.button("💾 SALVA PARZIALE", key=f"save_{i}", use_container_width=True):
+                if st.button("💾 SALVA NOTE", key=f"save_{i}", use_container_width=True):
                     st.session_state.db_tasks[p[c_nom]] = p['tasks_completed']
                     if ws_mem: 
                         aggiorna_attivita_cliente(ws_mem, p[c_nom], p['tasks_completed'])
@@ -419,7 +510,6 @@ else:
                 label_btn = "✅ CONCLUDI" if len(tasks_done) >= tasks_total else "⚠️ CHIUDI"
                 if st.button(label_btn, key=f"d_{i}", type=colore_btn, use_container_width=True):
                     try:
-                        # METODO SICURO PER TROVARE LA RIGA SENZA ERRORI DI CELLNOTFOUND
                         riga_cliente = df.index[df[c_nom] == p[c_nom]].tolist()[0] + 2
                         col_visita = list(df.columns).index(c_vis) + 1
                         
@@ -429,8 +519,12 @@ else:
                         log_visit(ws_ai, p[c_nom], p.get('duration', 20), report_extra)
                         
                         if ws_mem: pulisci_attivita_cliente(ws_mem, p[c_nom])
+                        if p[c_nom] in st.session_state.db_tasks:
+                            del st.session_state.db_tasks[p[c_nom]]
+                            
                         st.session_state.master_route.pop(i)
                         if ws_mem: salva_giro_solo_rotta(ws_mem, st.session_state.master_route)
                         st.rerun()
                     except Exception as e: 
                         st.error(f"Errore tecnico nel salvataggio: {e}")
+            st.markdown("<hr style='border:1px solid rgba(255,255,255,0.05); margin: 30px 0;'>", unsafe_allow_html=True)
