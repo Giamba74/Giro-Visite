@@ -16,7 +16,7 @@ import time
 st.set_page_config(page_title="Brightstar CRM PRO", page_icon="💎", layout="wide")
 TZ_ITALY = pytz.timezone('Europe/Rome')
 
-# --- 🎨 NUOVO DESIGN E STILE CSS ---
+# --- 🎨 DESIGN E STILE CSS ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
@@ -27,7 +27,6 @@ st.markdown("""
         color: #f1f5f9; 
     }
     
-    /* Intestazione App */
     .app-header {
         background: linear-gradient(90deg, #2563eb, #8b5cf6);
         -webkit-background-clip: text;
@@ -40,7 +39,6 @@ st.markdown("""
         text-shadow: 0px 4px 20px rgba(37, 99, 235, 0.2);
     }
 
-    /* Schede Clienti */
     .client-card { 
         background: linear-gradient(145deg, rgba(30, 41, 59, 0.85), rgba(15, 23, 42, 0.9)); 
         backdrop-filter: blur(12px); 
@@ -57,7 +55,6 @@ st.markdown("""
         border-color: rgba(59, 130, 246, 0.3);
     }
     
-    /* Testi dentro la scheda */
     .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 12px; }
     .client-name { font-size: 1.45rem; font-weight: 800; color: #ffffff; letter-spacing: -0.5px; }
     .arrival-time { 
@@ -70,7 +67,6 @@ st.markdown("""
         box-shadow: 0 4px 10px rgba(59, 130, 246, 0.3);
     }
     
-    /* Box Strategia */
     .strategy-box { 
         padding: 12px 16px; 
         border-radius: 10px; 
@@ -87,14 +83,12 @@ st.markdown("""
     .real-traffic { color: #fbbf24; font-size: 0.85rem; font-style: normal; font-weight: 600; background: rgba(251, 191, 36, 0.1); padding: 2px 8px; border-radius: 6px;}
     .ai-badge { font-size: 0.8rem; background-color: rgba(51, 65, 85, 0.8); color: #cbd5e1; padding: 3px 10px; border-radius: 6px; font-weight: 600;}
     
-    /* Badge Speciali */
     .badge { padding: 4px 10px; border-radius: 8px; margin-right: 8px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; display: inline-block; margin-bottom: 5px;}
     .forced-badge { background: rgba(251, 191, 36, 0.15); color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.4); }
     .prem-badge { background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4); }
     .task-badge { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
     .done-badge { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); }
     
-    /* Bottoni */
     div[data-testid="stButton"] button { 
         border-radius: 12px; 
         font-weight: 700; 
@@ -107,12 +101,10 @@ st.markdown("""
     div[data-testid="stButton"] button:hover { transform: scale(1.03) translateY(-2px); box-shadow: 0 8px 15px rgba(0,0,0,0.3); }
     div[data-testid="stButton"] button:active { transform: scale(0.98); }
     
-    /* Checkbox & Testi */
     .stCheckbox label { color: #f8fafc !important; font-weight: 600; }
     .stTextArea textarea { border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); background: rgba(15,23,42,0.6); color: white;}
     .stTextArea textarea:focus { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,0.2);}
     
-    /* Expander Sostituisci */
     .streamlit-expanderHeader { background-color: rgba(255,255,255,0.03) !important; color: #94a3b8 !important; border-radius: 12px; font-weight: 600;}
     .streamlit-expanderHeader:hover { color: white !important; background-color: rgba(255,255,255,0.08) !important;}
     </style>
@@ -124,7 +116,7 @@ API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
 
 # ==============================================================================
 # 👇 MODIFICA SOLO QUI SOTTO CON IL TUO ID FOGLIO GOOGLE 👇
-ID_DEL_FOGLIO = "IL_TUO_ID_QUI" 
+ID_DEL_FOGLIO = "https://docs.google.com/spreadsheets/d/1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0/edit?gid=0#gid=0" 
 # ==============================================================================
 
 @st.cache_resource
@@ -140,7 +132,6 @@ def connect_db():
         ws_mem = None
         if "MEMORIA_GIRO" in [w.title for w in sh.worksheets()]:
              ws_mem = sh.worksheet("MEMORIA_GIRO")
-             # Inizializza Headers se vuoto
              if not ws_mem.acell("A1").value:
                  ws_mem.update_acell("A1", "DATA"); ws_mem.update_acell("B1", "JSON_DATA")
                  ws_mem.update_acell("D1", "DB_CLIENTE"); ws_mem.update_acell("E1", "DB_TASKS")
@@ -344,14 +335,9 @@ else:
             if sel_cap: mask_standard &= df[c_cap].isin(sel_cap)
             if only_premium and c_prem: mask_standard &= df[c_prem].astype(str).str.upper().str.contains('SI', na=False)
 
-            # Filtro esclusione definitiva per CG Fatto
-            clienti_cg_completato = []
-            for nome_cliente, tasks_fatti in st.session_state.db_tasks.items():
-                if any("CG" in str(t).upper() for t in tasks_fatti):
-                    clienti_cg_completato.append(nome_cliente)
+            # Filtro esclusione per CD (Se vuoi escludere anche chi l'ha già fatto, lasciamo questo blocco vuoto per coerenza con l'ordinamento. 
+            # In base alla tua richiesta, se CD è presente in Excel li mettiamo in fondo).
             
-            mask_standard &= ~df[c_nom].isin(clienti_cg_completato)
-
             df_final = pd.concat([df[df[c_nom].isin(sel_forced)], df[mask_standard]]).drop_duplicates(subset=[c_nom])
             raw = df_final.to_dict('records')
             
@@ -388,7 +374,11 @@ else:
                             
                             if p[c_nom] in sel_forced: score -= 100000000 
                             if c_prem and p.get(c_prem) == 'SI': score -= 2000 
-                            if c_att and p.get(c_att) and str(p[c_att]).strip(): score -= 5000
+                            
+                            # --- LOGICA ANTI-CD: CHI NON HA "CD" VINCE ---
+                            txt_attivita = str(p.get(c_att, '')).upper()
+                            if "CD" not in txt_attivita: 
+                                score -= 50000000 # Priorità Massima
                             
                             if score < best_score: best_score, best = score, p
                         
@@ -415,6 +405,27 @@ else:
         route = st.session_state.master_route
         st.markdown(f"<p style='text-align:center; color:#94a3b8; font-weight:600;'>🏁 Orario Rientro Stimato: <span style='color:#38bdf8'>{route[-1]['arr'].strftime('%H:%M') if route else '--:--'}</span></p>", unsafe_allow_html=True)
         
+        # --- GENERATORE TESTO PER OCCHIALI SMART (TELEPROMPTER) ---
+        with st.expander("👓 ESPORTA HUD PER OCCHIALI SMART (Scorrimento con Anello)"):
+            st.markdown("Copia il testo qui sotto e incollalo nello strumento **Teleprompter / Note** della tua app Even Hub.")
+            
+            hud_text = "📅 GIRO VISITE BRIGHTSTAR\n"
+            hud_text += "-" * 25 + "\n\n"
+            
+            for idx_hud, p_hud in enumerate(route):
+                ora_hud = p_hud['arr'].strftime('%H:%M')
+                nome_hud = str(p_hud[c_nom]).upper()
+                comune_hud = str(p_hud[c_com])
+                
+                tasks_hud = [t.strip() for t in str(p_hud.get(c_att, '')).split(',') if t.strip()]
+                task_str = f"\n⚠️ {', '.join(tasks_hud)}" if tasks_hud else ""
+                
+                hud_text += f"[{ora_hud}] {idx_hud+1}. {nome_hud}\n📍 {comune_hud}{task_str}\n\n"
+            
+            st.code(hud_text, language="markdown")
+            
+        st.markdown("<br>", unsafe_allow_html=True) # Spazio per separare l'expander dal resto
+        
         for i, p in enumerate(route):
             ai_lbl = "AI" if p.get('learned') else "Std"
             tel_excel = str(p.get(c_tel, '')).strip()
@@ -428,8 +439,9 @@ else:
             forced_html = "<span class='badge forced-badge'>⭐ VIP</span>" if p[c_nom] in sel_forced else ""
             prem_html = "<span class='badge prem-badge'>💎 PREMIUM</span>" if c_prem and p.get(c_prem) == 'SI' else ""
             
-            has_tasks = c_att and p.get(c_att) and str(p[c_att]).strip()
-            task_badge_html = "<span class='badge task-badge'>📋 ATTIVITÀ</span>" if has_tasks else ""
+            txt_att = str(p.get(c_att, '')).upper()
+            has_cd = "CD" in txt_att
+            task_badge_html = "<span class='badge done-badge'>✅ CD COMPLETATO</span>" if has_cd else ""
 
             canvass_html = ""
             valore_canvass = p.get(c_canv, '') if c_canv else ''
@@ -457,9 +469,6 @@ else:
                 candidates_df = df[~df[c_nom].isin(clienti_nel_giro)]
                 if sel_zona: candidates_df = candidates_df[candidates_df[c_com].isin(sel_zona)]
                 if sel_cap: candidates_df = candidates_df[candidates_df[c_cap].isin(sel_cap)]
-                
-                clienti_cg_completato = [c for c, tasks in st.session_state.db_tasks.items() if any("CG" in str(t).upper() for t in tasks)]
-                candidates_df = candidates_df[~candidates_df[c_nom].isin(clienti_cg_completato)]
                 
                 candidati_sostituzione = sorted(candidates_df[c_nom].unique().tolist())
                 with col_swap_1: nuovo_cliente_nome = st.selectbox(f"Seleziona cliente alternativo:", ["- Scegli -"] + candidati_sostituzione, key=f"sel_swap_{i}")
@@ -512,7 +521,6 @@ else:
                     try:
                         riga_cliente = df.index[df[c_nom] == p[c_nom]].tolist()[0] + 2
                         col_visita = list(df.columns).index(c_vis) + 1
-                        
                         ws.update_cell(riga_cliente, col_visita, "SI")
                         
                         report_extra = (f"[ATTIVITÀ: {', '.join(tasks_done)}] " if tasks_done else "") + (f"[NOTE: {p.get('NOTE_SESSION', '')}]" if p.get('NOTE_SESSION') else "")
