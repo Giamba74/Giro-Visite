@@ -116,7 +116,7 @@ API_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY")
 
 # ==============================================================================
 # 👇 MODIFICA SOLO QUI SOTTO CON IL TUO ID FOGLIO GOOGLE 👇
-ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
+ID_DEL_FOGLIO = "1mpTAsPSuH5zPqI2Ec39XDlM-IK62gFL_IOGZVcMXqm8" 
 # ==============================================================================
 
 @st.cache_resource
@@ -140,7 +140,6 @@ def connect_db():
         return ws_main, ws_log, ws_mem
     except: return None, None, None
 
-# --- SALVATAGGIO ---
 def salva_giro_solo_rotta(sh_memoria, rotta_data):
     try:
         dati_export = copy.deepcopy(rotta_data)
@@ -304,12 +303,11 @@ else:
     with st.sidebar:
         st.markdown("<h2 style='text-align: center; color: #38bdf8; margin-bottom: 20px;'>⚙️ Settings</h2>", unsafe_allow_html=True)
         indirizzo_start = st.text_input("📍 Luogo di Partenza:", value="Chianti, Sede")
-        
-        # 👇 QUI HO MODIFICATO IL VALORE MASSIMO A 25 👇
         num_visite = st.slider("🚗 Clienti da visitare:", 1, 25, 8)
-        
         st.divider()
-        only_premium = st.toggle("💎 Mostra solo PREMIUM", value=False)
+        
+        only_premium = st.toggle("💎 Mostra solo PREMIUM", value=True)
+        
         sel_zona = st.multiselect("🌍 Filtra per Zona (Comuni)", sorted(df[c_com].unique()))
         sel_cap = st.multiselect("📮 Filtra per CAP", sorted(df[c_cap].unique()) if c_cap in df.columns else [])
         st.divider()
@@ -416,7 +414,6 @@ else:
         route = st.session_state.master_route
         st.markdown(f"<p style='text-align:center; color:#94a3b8; font-weight:600;'>🏁 Orario Rientro Stimato: <span style='color:#38bdf8'>{route[-1]['arr'].strftime('%H:%M') if route else '--:--'}</span></p>", unsafe_allow_html=True)
         
-        # --- GENERATORE TESTO PER OCCHIALI SMART (TELEPROMPTER) ---
         with st.expander("👓 ESPORTA HUD PER OCCHIALI SMART (Scorrimento con Anello)"):
             st.markdown("Copia il testo qui sotto e incollalo nello strumento **Teleprompter / Note** della tua app Even Hub.")
             
@@ -502,17 +499,17 @@ else:
 
             if 'tasks_completed' not in p: p['tasks_completed'] = []
             if c_att and p.get(c_att):
-                task_list = [t.strip() for t in str(p[c_att]).split(',') if t.strip()]
-                if task_list:
+                task_list_raw = [t.strip() for t in str(p[c_att]).split(',') if t.strip()]
+                if task_list_raw:
                     st.markdown("<p style='color:#e2e8f0; font-weight:600; margin-bottom:5px; margin-top:10px;'>📋 Checklist Attività:</p>", unsafe_allow_html=True)
-                    for t_idx, task in enumerate(task_list):
+                    for t_idx, task in enumerate(task_list_raw):
                         chk_key = f"chk_{i}_{t_idx}_{p[c_nom]}"
                         is_checked = st.checkbox(task, value=(task in p['tasks_completed']), key=chk_key)
                         if is_checked and task not in p['tasks_completed']: p['tasks_completed'].append(task)
                         elif not is_checked and task in p['tasks_completed']: p['tasks_completed'].remove(task)
 
             tasks_done = p.get('tasks_completed', [])
-            tasks_total = len([t.strip() for t in str(p.get(c_att, '')).split(',') if t.strip()])
+            task_list_raw = [t.strip() for t in str(p.get(c_att, '')).split(',') if t.strip()]
             p['NOTE_SESSION'] = st.text_area(f"🎤 Note Visita {p[c_nom]}:", value=p.get('NOTE_SESSION', ''), key=f"note_{i}", height=70, placeholder="Scrivi qui il resoconto della visita...")
             
             c1, c2, c3, c4 = st.columns(4)
@@ -529,8 +526,16 @@ else:
                         aggiorna_attivita_cliente(ws_mem, p[c_nom], p['tasks_completed'])
                         salva_giro_solo_rotta(ws_mem, st.session_state.master_route)
             with c4:
-                colore_btn = "primary" if len(tasks_done) >= tasks_total else "secondary"
-                label_btn = "✅ CONCLUDI" if len(tasks_done) >= tasks_total else "⚠️ CHIUDI"
+                # --- LOGICA TASTO CONCLUDI BASATA SU "CG" ---
+                richiede_cg = any("CG" in t.upper() for t in task_list_raw)
+                cg_completato = any("CG" in t.upper() for t in tasks_done)
+                
+                # Sbloccato se non ha CG da fare, oppure se ha CG ed è stato spuntato
+                pronto_per_chiudere = True if not richiede_cg else cg_completato
+                
+                colore_btn = "primary" if pronto_per_chiudere else "secondary"
+                label_btn = "✅ CONCLUDI" if pronto_per_chiudere else "⚠️ CHIUDI"
+                
                 if st.button(label_btn, key=f"d_{i}", type=colore_btn, use_container_width=True):
                     try:
                         riga_cliente = df.index[df[c_nom] == p[c_nom]].tolist()[0] + 2
