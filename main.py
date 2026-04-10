@@ -301,7 +301,7 @@ else:
 
     # --- SIDEBAR DESIGN ---
     with st.sidebar:
-        st.markdown("<h2 style='text-align: center; color: #38bdf8; margin-bottom: 20px;'>⚙️ Settings</h2>", unsafe_allow_html=True)
+        st.markdown("<h2 style='text-align: center; color: #38bdf8; margin-bottom: 20px;'>⚙️ Impostazioni</h2>", unsafe_allow_html=True)
         indirizzo_start = st.text_input("📍 Luogo di Partenza:", value="Chianti, Sede")
         num_visite = st.slider("🚗 Clienti da visitare:", 1, 25, 8)
         st.divider()
@@ -514,7 +514,7 @@ else:
             
             c1, c2, c3, c4 = st.columns(4)
             with c1: 
-                if p['g_data']['found']: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={p['g_data']['coords'][0]},{p['g_data']['coords'][1]}&travelmode=driving", use_container_width=True)
+                if p['g_data']['found']: st.link_button("🚙 MAPS", f"https://www.google.com/maps/dir/?api=1&destination={p['g_data']['coords'][0]},{p['g_data']['coords'][1]}&travelmode=driving", use_container_width=True)
                 else: st.button("🚫 NO GPS", disabled=True, use_container_width=True)
             with c2: 
                 if tel_display: st.link_button("📞 CHIAMA", f"tel:{tel_display}", use_container_width=True)
