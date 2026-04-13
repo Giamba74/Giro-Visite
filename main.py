@@ -138,7 +138,9 @@ def connect_db():
                  ws_mem.update_acell("D1", "DB_CLIENTE"); ws_mem.update_acell("E1", "DB_TASKS")
         
         return ws_main, ws_log, ws_mem
-    except: return None, None, None
+    except Exception as e: 
+        st.error(f"❌ Errore Connessione al Database: {e}")
+        return None, None, None
 
 def salva_giro_solo_rotta(sh_memoria, rotta_data):
     try:
@@ -271,15 +273,23 @@ def agente_strategico(note_precedenti):
 try: ws, ws_ai, ws_mem = connect_db()
 except: ws, ws_ai, ws_mem = None, None, None
 
-if ws is None: st.error("❌ Errore Connessione al Database di Google Sheets.")
+if ws is None: 
+    pass
 else:
     data = ws.get_all_values()
     df = pd.DataFrame(data[1:], columns=[h.strip().upper() for h in data[0]])
-    c_nom = next(c for c in df.columns if "CLIENTE" in c)
-    c_ind = next(c for c in df.columns if "INDIRIZZO" in c or "VIA" in c)
-    c_com = next(c for c in df.columns if "COMUNE" in c)
-    c_cap = next((c for c in df.columns if "CAP" in c), "CAP")
-    c_vis = next(c for c in df.columns if "VISITATO" in c)
+    
+    try:
+        c_nom = next(c for c in df.columns if "CLIENTE" in c)
+        c_ind = next(c for c in df.columns if "INDIRIZZO" in c or "VIA" in c)
+        c_com = next(c for c in df.columns if "COMUNE" in c)
+        c_cap = next((c for c in df.columns if "CAP" in c), "CAP")
+        c_vis = next(c for c in df.columns if "VISITATO" in c)
+    except StopIteration:
+        st.error("❌ ERRORE CRITICO: Non trovo le intestazioni delle colonne nel tuo Foglio Google.")
+        st.warning(f"Queste sono le colonne che sto leggendo adesso nella RIGA 1: **{', '.join(df.columns)}**")
+        st.info("💡 **Soluzione:** Apri il tuo foglio Google. Vai nella primissima riga (Riga 1) e assicurati che ci siano celle con scritto esattamente **CLIENTE**, **INDIRIZZO**, **COMUNE**, e **VISITATO**.")
+        st.stop()
     
     if "TELEFONO" in df.columns: c_tel = "TELEFONO"
     else: c_tel = next((c for c in df.columns if "TELEFONO" in c or "CELL" in c or "TEL" in c), "TELEFONO")
@@ -332,13 +342,11 @@ else:
                     loc_data = get_google_data([indirizzo_start])
                     if loc_data and loc_data['found']: start_coords = loc_data['coords']
             
-            # --- 1. FILTRI BASE ---
             mask_standard = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
             if sel_zona: mask_standard &= df[c_com].isin(sel_zona)
             if sel_cap: mask_standard &= df[c_cap].isin(sel_cap)
             if only_premium and c_prem: mask_standard &= df[c_prem].astype(str).str.upper().str.contains('SI', na=False)
 
-            # --- 2. FILTRO ESCLUSIONE CG COMPLETATO ---
             clienti_cg_completato = []
             for nome_cliente, tasks_fatti in st.session_state.db_tasks.items():
                 if any("CG" in str(t).upper() for t in tasks_fatti):
@@ -384,7 +392,6 @@ else:
                             if c_prem and p.get(c_prem) == 'SI': score -= 2000 
                             if c_att and p.get(c_att) and str(p[c_att]).strip(): score -= 5000
                             
-                            # --- LOGICA ANTI-CD DA MEMORIA GIRO ---
                             storico_tasks = st.session_state.db_tasks.get(p[c_nom], [])
                             if "CD" not in str(storico_tasks).upper():
                                 score -= 50000000
@@ -514,11 +521,11 @@ else:
             
             c1, c2, c3, c4 = st.columns(4)
             with c1: 
-                if p['g_data']['found']: st.link_button("🚙 MAPS", f"https://www.google.com/maps/dir/?api=1&destination={p['g_data']['coords'][0]},{p['g_data']['coords'][1]}&travelmode=driving", use_container_width=True)
-                else: st.button("🚫 NO GPS", disabled=True, use_container_width=True)
+                if p['g_data']['found']: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={p['g_data']['coords'][0]},{p['g_data']['coords'][1]}&travelmode=driving", use_container_width=True)
+                else: st.button("🚫 NO GPS", disabled=True, use_container_width=True, key=f"no_gps_{i}") # AGGIUNTO KEY QUI
             with c2: 
                 if tel_display: st.link_button("📞 CHIAMA", f"tel:{tel_display}", use_container_width=True)
-                else: st.button("🚫 NO TEL", disabled=True, use_container_width=True)
+                else: st.button("🚫 NO TEL", disabled=True, use_container_width=True, key=f"no_tel_{i}") # AGGIUNTO KEY QUI
             with c3:
                 if st.button("💾 SALVA NOTE", key=f"save_{i}", use_container_width=True):
                     st.session_state.db_tasks[p[c_nom]] = p['tasks_completed']
@@ -526,11 +533,9 @@ else:
                         aggiorna_attivita_cliente(ws_mem, p[c_nom], p['tasks_completed'])
                         salva_giro_solo_rotta(ws_mem, st.session_state.master_route)
             with c4:
-                # --- LOGICA TASTO CONCLUDI BASATA SU "CG" ---
                 richiede_cg = any("CG" in t.upper() for t in task_list_raw)
                 cg_completato = any("CG" in t.upper() for t in tasks_done)
                 
-                # Sbloccato se non ha CG da fare, oppure se ha CG ed è stato spuntato
                 pronto_per_chiudere = True if not richiede_cg else cg_completato
                 
                 colore_btn = "primary" if pronto_per_chiudere else "secondary"
