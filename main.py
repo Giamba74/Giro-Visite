@@ -150,7 +150,6 @@ def get_geo_data(query_list, fallback_city=""):
             location = geolocator.geocode(q, timeout=10)
             if location: return {"coords": (location.latitude, location.longitude), "tel": "", "found": True, "is_fallback": False}
         except Exception as e: 
-            print(f"Errore Geo: {e}")
             continue
     if fallback_city:
         try:
@@ -184,13 +183,12 @@ def agente_strategico(note_precedenti):
     if 'voltura' in txt: return "🔄 COACH: Voltura in corso. Verifica stato documenti.", "border-left-color: #8b5cf6; background: rgba(139, 92, 246, 0.15);"
     return f"ℹ️ MEMO: {note_precedenti[:60]}...", "border-left-color: #3b82f6;"
 
-# --- FUNZIONE PULIZIA NOMI (Rende la ricerca elastica) ---
 def pulisci_nome(nome):
     nome = str(nome).upper()
-    nome = re.sub(r'[^A-Z0-9\s]', '', nome) # Rimuove punteggiatura
-    nome = re.sub(r'\b(SNC|SRL|SAS|SPA|SAPA|DI|IL|LA|LO|I|GLI|LE)\b', '', nome) # Rimuove forme societarie e articoli
-    nome = nome.replace('SAN ', 'S ').replace('SANTA ', 'S ') # Normalizza i Santi
-    return ' '.join(nome.split()) # Rimuove spazi doppi
+    nome = re.sub(r'[^A-Z0-9\s]', '', nome)
+    nome = re.sub(r'\b(SNC|SRL|SAS|SPA|SAPA|DI|IL|LA|LO|I|GLI|LE)\b', '', nome)
+    nome = nome.replace('SAN ', 'S ').replace('SANTA ', 'S ')
+    return ' '.join(nome.split())
 
 # --- APP START ---
 try: ws, ws_ai, ws_mem, ws_pot = connect_db()
@@ -209,7 +207,7 @@ else:
         c_cap = next((c for c in df.columns if "CAP" in c), "CAP")
         c_vis = next(c for c in df.columns if "VISITATO" in c)
     except StopIteration:
-        st.error("❌ ERRORE: Colonne fondamentali mancanti nel Foglio 1 (Assicurati di avere CLIENTE, INDIRIZZO, COMUNE, CAP, VISITATO).")
+        st.error("❌ ERRORE: Colonne fondamentali mancanti nel Foglio 1.")
         st.stop()
     
     c_tel = next((c for c in df.columns if "TELEFONO" in c or "CELL" in c or "TEL" in c), "TELEFONO")
@@ -421,163 +419,172 @@ else:
 
         st.divider()
         
-        # --- CARICAMENTO FILE TELEMACO (FILTRO ELASTICO CORRETTO) ---
+        # --- CARICAMENTO FILE TELEMACO ---
         st.markdown("### 📂 Carica Lista Telemaco/InfoCamere")
-        st.write("Carica il file Excel delle nuove aperture. L'IA filtrerà le tue zone esatte, rimuoverà i già clienti e calcolerà i 150m.")
+        st.write("Carica il file Excel delle nuove aperture. L'IA rimuoverà i già clienti e calcolerà i 150m.")
         
         file_tel = st.file_uploader("Trascina qui il file (Excel o CSV)", type=['xlsx', 'xls', 'csv'])
         
         if file_tel:
             try:
-                if file_tel.name.endswith('.csv'): df_tel = pd.read_csv(file_tel, sep=None, engine='python')
-                else: df_tel = pd.read_excel(file_tel)
+                # ⚠️ SUPER LETTORE TELEMACO: Forza la lettura con punto e virgola e codifica speciale
+                if file_tel.name.endswith('.csv'):
+                    try:
+                        df_tel = pd.read_csv(file_tel, sep=';', encoding='latin1', dtype=str)
+                    except:
+                        file_tel.seek(0)
+                        df_tel = pd.read_csv(file_tel, sep=',', encoding='utf-8', dtype=str)
+                else:
+                    df_tel = pd.read_excel(file_tel, dtype=str)
                 
-                st.success("File letto correttamente! Imposta le colonne:")
+                st.success("File letto correttamente!")
                 
+                # ANTEPRIMA DEL FILE: Così l'utente capisce quali colonne selezionare!
+                st.write("👀 **Anteprima del file caricato (Controlla le intestazioni):**")
+                st.dataframe(df_tel.head(3), use_container_width=True)
+                
+                st.markdown("#### ⚙️ Associa le Colonne")
                 c_t1, c_t2, c_t3 = st.columns(3)
-                with c_t1: col_nome_tel = st.selectbox("Colonna NOME:", df_tel.columns, index=list(df_tel.columns).index('Denominazione') if 'Denominazione' in df_tel.columns else 0)
-                with c_t2: col_com_tel = st.selectbox("Colonna COMUNE:", df_tel.columns, index=list(df_tel.columns).index('Comune') if 'Comune' in df_tel.columns else 0)
                 
+                # Seleziona Colonna Nome (Cerca 'Denominazione', se non c'è prende la prima)
+                idx_nome = list(df_tel.columns).index('Denominazione') if 'Denominazione' in df_tel.columns else 0
+                with c_t1: col_nome_tel = st.selectbox("Colonna NOME AZIENDA:", df_tel.columns, index=idx_nome)
+                
+                # Seleziona Colonna Comune
+                idx_comune = list(df_tel.columns).index('Comune') if 'Comune' in df_tel.columns else 0
+                with c_t2: col_com_tel = st.selectbox("Colonna COMUNE:", df_tel.columns, index=idx_comune)
+                
+                # Seleziona Colonna P.IVA
                 opzioni_piva = ["Nessuna"] + list(df_tel.columns)
                 idx_piva_def = opzioni_piva.index('Partita IVA') if 'Partita IVA' in opzioni_piva else (opzioni_piva.index('P.IVA') if 'P.IVA' in opzioni_piva else 0)
                 with c_t3: col_piva_tel = st.selectbox("Colonna PARTITA IVA:", opzioni_piva, index=idx_piva_def)
                 
-                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown("<hr style='border:1px solid rgba(255,255,255,0.05);'>", unsafe_allow_html=True)
+                st.markdown("#### 🎯 Seleziona le tue zone:")
                 
-                usa_filtro_zona = st.checkbox("🌍 Applica Filtro Comune (Consigliato per non fare mappe di città fuori zona)", value=True)
-                usa_filtro_cap = st.checkbox("📮 Applica Filtro CAP (Consigliato per filtrare i quartieri di Firenze)", value=True)
+                # MENU A TENDINA MAGICO PER LE CITTÀ!
+                comuni_nel_file = sorted(df_tel[col_com_tel].astype(str).str.upper().str.strip().unique().tolist())
+                comuni_db_puliti = [pulisci_nome(c) for c in df[c_com].dropna().astype(str).unique()]
+                
+                default_sel = []
+                for c_tel_name in comuni_nel_file:
+                    if pulisci_nome(c_tel_name) in comuni_db_puliti:
+                        default_sel.append(c_tel_name)
+                
+                comuni_selezionati = st.multiselect("L'IA analizzerà SOLO i comuni che scegli qui sotto:", comuni_nel_file, default=default_sel)
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                usa_filtro_cap = st.checkbox("📮 Usa il Filtro CAP (Consigliato per scartare quartieri di Firenze non in tuo portafoglio)", value=False)
                 if usa_filtro_cap: col_cap_tel = st.selectbox("Colonna CAP:", list(df_tel.columns), index=list(df_tel.columns).index('Cap') if 'Cap' in df_tel.columns else 0)
                 else: col_cap_tel = None
                 
                 if st.button("🚀 AVVIA SCANSIONE IA SULLA LISTA", type="primary", use_container_width=True):
-                    st.info("Inizio scansione... (Calcolo Mappe e 150m in corso)")
-                    
-                    df_prem = df[df[c_prem].str.upper().str.contains("SI", na=False)].copy()
-                    
-                    nomi_esistenti_puliti = [pulisci_nome(n) for n in df[c_nom].astype(str).tolist()]
-                    pive_esistenti = [str(p).strip() for p in df[c_piva].astype(str).tolist()] if c_piva else []
-                    
-                    # --- MAPPA ZONE ELASTICA RIPARATA ---
-                    mappa_zone = {}
-                    comuni_puliti_dict = {}
-                    
-                    if usa_filtro_zona:
+                    if not comuni_selezionati:
+                        st.error("⚠️ Seleziona almeno un comune dalla lista qui sopra prima di avviare!")
+                    else:
+                        st.info("Inizio scansione... (Calcolo Mappe e 150m in corso)")
+                        
+                        df_prem = df[df[c_prem].str.upper().str.contains("SI", na=False)].copy()
+                        nomi_esistenti_puliti = [pulisci_nome(n) for n in df[c_nom].astype(str).tolist()]
+                        pive_esistenti = [str(p).strip() for p in df[c_piva].astype(str).tolist()] if c_piva else []
+                        
+                        mappa_zone = {}
                         for comune, cap_list in df.groupby(c_com)[c_cap].unique().items():
                             if pd.isna(comune) or not str(comune).strip(): continue
-                            comune_str = str(comune).upper().strip()
-                            comune_pulito = pulisci_nome(comune_str)
-                            caps = []
-                            for c in cap_list:
-                                if pd.notna(c) and str(c).strip():
-                                    caps.append(str(c).replace('.0','').strip().zfill(5))
-                            mappa_zone[comune_str] = caps
-                            comuni_puliti_dict[comune_str] = comune_pulito
-                    
-                    risultati_positivi = []
-                    scartati_zona = 0
-                    scartati_clienti = 0
-                    scartati_radar = 0
-                    scartati_gps = 0 
-                    
-                    debug_comuni_scartati = []
-                    debug_cap_scartati = []
-                    
-                    prog_tel = st.progress(0)
-                    
-                    for idx, riga in df_tel.iterrows():
-                        try:
-                            prog_tel.progress((idx + 1) / len(df_tel))
-                            n_az = str(riga[col_nome_tel]).strip()
-                            n_az_pulito = pulisci_nome(n_az)
-                            
-                            comune_target = str(riga[col_com_tel]).upper().strip()
-                            comune_target_pulito = pulisci_nome(comune_target)
-                            cap_target = str(riga[col_cap_tel]).replace('.0', '').strip().zfill(5) if col_cap_tel else ""
-                            
-                            # --- UNIONE INDIRIZZO TELEMACO ---
-                            if 'Toponimo' in df_tel.columns and 'Via' in df_tel.columns and 'N civico' in df_tel.columns:
-                                ind_target = f"{str(riga['Toponimo']).strip()} {str(riga['Via']).strip()} {str(riga['N civico']).replace('.0','').strip()}".replace('nan', '').strip()
-                            elif 'Indirizzo' in df_tel.columns:
-                                ind_target = str(riga['Indirizzo']).strip()
-                            else:
-                                ind_target = ""
+                            mappa_zone[pulisci_nome(str(comune))] = [str(c).replace('.0','').strip().zfill(5) for c in cap_list if pd.notna(c) and str(c).strip() != ""]
+                        
+                        risultati_positivi = []
+                        scartati_zona = 0
+                        scartati_clienti = 0
+                        scartati_radar = 0
+                        scartati_gps = 0 
+                        
+                        debug_cap_scartati = []
+                        
+                        prog_tel = st.progress(0)
+                        
+                        for idx, riga in df_tel.iterrows():
+                            try:
+                                prog_tel.progress((idx + 1) / len(df_tel))
+                                n_az = str(riga[col_nome_tel]).strip()
+                                n_az_pulito = pulisci_nome(n_az)
                                 
-                            # FILTRO 1: ZONE E CAP (Completamente Sistemato)
-                            if usa_filtro_zona:
-                                match_comune = None
-                                for com_db, com_db_pulito in comuni_puliti_dict.items():
-                                    if comune_target_pulito == com_db_pulito or comune_target_pulito in com_db_pulito or com_db_pulito in comune_target_pulito:
-                                        match_comune = com_db
-                                        break
+                                comune_target = str(riga[col_com_tel]).upper().strip()
+                                cap_target = str(riga[col_cap_tel]).replace('.0', '').strip().zfill(5) if col_cap_tel else ""
                                 
-                                if not match_comune:
-                                    scartati_zona += 1
-                                    debug_comuni_scartati.append(comune_target)
-                                    continue
-                                
-                                if usa_filtro_cap and cap_target and len(mappa_zone.get(match_comune, [])) > 0:
-                                    if cap_target not in mappa_zone[match_comune]:
-                                        scartati_zona += 1
-                                        debug_cap_scartati.append(f"{comune_target} (Cercavo: {cap_target} - DB ha: {', '.join(mappa_zone[match_comune])})")
-                                        continue
-                                
-                            # FILTRO 2: GIA' CLIENTI (Preciso per non fare stragi involontarie)
-                            se_piva = str(riga[col_piva_tel]).strip() if col_piva_tel and col_piva_tel != "Nessuna" else ""
-                            
-                            is_gia_cliente = False
-                            if se_piva and se_piva in pive_esistenti and se_piva != "nan":
-                                is_gia_cliente = True
-                            else:
-                                if n_az_pulito in nomi_esistenti_puliti:
-                                    is_gia_cliente = True
-                            
-                            if is_gia_cliente:
-                                scartati_clienti += 1
-                                continue 
-                                
-                            # FILTRO 3: RADAR 150m
-                            t_coords = get_geo_data([f"{ind_target}, {riga[col_com_tel]}, Italy"])[0]
-                            if t_coords:
-                                violazione = False
-                                for _, p_row in df_prem.iterrows():
-                                    p_c = get_geo_data([f"{p_row[c_ind]}, {p_row[c_com]}, Italy"], fallback_city=p_row[c_com])[0]
-                                    if p_c and get_walking_distance(t_coords, p_c) < 150:
-                                        violazione = True; break
-                                
-                                if not violazione:
-                                    risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, ind_target, str(riga[col_com_tel]), "✅ OK (150m Superati)", f"CAP: {cap_target}"])
+                                # --- UNIONE INDIRIZZO TELEMACO ---
+                                if 'Toponimo' in df_tel.columns and 'Via' in df_tel.columns and 'N civico' in df_tel.columns:
+                                    ind_target = f"{str(riga['Toponimo']).strip()} {str(riga['Via']).strip()} {str(riga['N civico']).replace('.0','').strip()}".replace('nan', '').strip()
+                                elif 'Indirizzo' in df_tel.columns:
+                                    ind_target = str(riga['Indirizzo']).strip()
                                 else:
-                                    scartati_radar += 1
-                            else:
-                                scartati_gps += 1
-                                risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, ind_target, str(riga[col_com_tel]), "⚠️ Mappa Fallita (Verifica a mano)", f"CAP: {cap_target}"])
-                        except Exception as inner_e:
-                            continue
-                            
-                    prog_tel.empty()
-                    
-                    st.markdown("### 📊 Report Scansione")
-                    c_rep1, c_rep2, c_rep3, c_rep4 = st.columns(4)
-                    c_rep1.metric("🌍 Fuori Zona/CAP", scartati_zona)
-                    c_rep2.metric("👥 Già Clienti", scartati_clienti)
-                    c_rep3.metric("🔴 < 150m", scartati_radar)
-                    c_rep4.metric("⚠️ Mappe Fallite", scartati_gps)
-                    
-                    if scartati_zona > 0:
-                        with st.expander("🔍 DEBUG: Vedi esattamente quali città o CAP sono stati scartati"):
-                            if debug_comuni_scartati:
-                                st.write("**Comuni non trovati nel tuo Foglio 1:**")
-                                st.write(list(set(debug_comuni_scartati)))
-                            if debug_cap_scartati:
-                                st.write("**Città corrette ma con CAP non trovati nel tuo Foglio 1:**")
+                                    ind_target = ""
+                                    
+                                # FILTRO 1: COMUNE MANUALE
+                                if comune_target not in comuni_selezionati:
+                                    scartati_zona += 1
+                                    continue
+                                    
+                                # FILTRO 2: CAP
+                                if usa_filtro_cap and cap_target:
+                                    comune_tel_pulito = pulisci_nome(comune_target)
+                                    caps_ammessi = mappa_zone.get(comune_tel_pulito, [])
+                                    if len(caps_ammessi) > 0 and cap_target not in caps_ammessi:
+                                        scartati_zona += 1
+                                        debug_cap_scartati.append(f"{comune_target} (CAP {cap_target} scartato)")
+                                        continue
+                                    
+                                # FILTRO 3: GIA' CLIENTI
+                                se_piva = str(riga[col_piva_tel]).strip() if col_piva_tel and col_piva_tel != "Nessuna" else ""
+                                is_gia_cliente = False
+                                if se_piva and se_piva in pive_esistenti and se_piva != "nan":
+                                    is_gia_cliente = True
+                                else:
+                                    if n_az_pulito in nomi_esistenti_puliti:
+                                        is_gia_cliente = True
+                                
+                                if is_gia_cliente:
+                                    scartati_clienti += 1
+                                    continue 
+                                    
+                                # FILTRO 4: RADAR 150m
+                                t_coords = get_geo_data([f"{ind_target}, {riga[col_com_tel]}, Italy"])[0]
+                                if t_coords:
+                                    violazione = False
+                                    for _, p_row in df_prem.iterrows():
+                                        p_c = get_geo_data([f"{p_row[c_ind]}, {p_row[c_com]}, Italy"], fallback_city=p_row[c_com])[0]
+                                        if p_c and get_walking_distance(t_coords, p_c) < 150:
+                                            violazione = True; break
+                                    
+                                    if not violazione:
+                                        risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, ind_target, str(riga[col_com_tel]), "✅ OK (150m Superati)", f"CAP: {cap_target}"])
+                                    else:
+                                        scartati_radar += 1
+                                else:
+                                    scartati_gps += 1
+                                    risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, ind_target, str(riga[col_com_tel]), "⚠️ Mappa Fallita (Verifica a mano)", f"CAP: {cap_target}"])
+                            except Exception as inner_e:
+                                continue
+                                
+                        prog_tel.empty()
+                        
+                        st.markdown("### 📊 Report Scansione")
+                        c_rep1, c_rep2, c_rep3, c_rep4 = st.columns(4)
+                        c_rep1.metric("🌍 Comuni/CAP Ignorati", scartati_zona)
+                        c_rep2.metric("👥 Già Clienti", scartati_clienti)
+                        c_rep3.metric("🔴 < 150m", scartati_radar)
+                        c_rep4.metric("⚠️ Mappe Fallite", scartati_gps)
+                        
+                        if debug_cap_scartati:
+                            with st.expander("🔍 DEBUG: Vedi i CAP scartati su città valide"):
                                 st.write(list(set(debug_cap_scartati)))
-                    
-                    if risultati_positivi:
-                        st.success(f"🎯 BERSAGLIO! Trovati {len(risultati_positivi)} target potenziali liberi!")
-                        for r in risultati_positivi: ws_pot.append_row(r)
-                        st.balloons()
-                        st.info("Ricarica la pagina: i bar sono stati aggiunti alla tabella in alto e salvati su Excel.")
-                    else:
-                        st.warning("Nessun target valido in questo file (Tutti fuori zona, già clienti o a meno di 150m dai tuoi Premium).")
+                        
+                        if risultati_positivi:
+                            st.success(f"🎯 BERSAGLIO! Trovati {len(risultati_positivi)} target potenziali liberi!")
+                            for r in risultati_positivi: ws_pot.append_row(r)
+                            st.balloons()
+                            st.info("Ricarica la pagina: i bar sono stati aggiunti alla tabella in alto e salvati su Excel.")
+                        else:
+                            st.warning("Nessun target valido in questo file (Tutti fuori zona, già clienti o a meno di 150m dai tuoi Premium).")
             except Exception as e:
-                st.error(f"Errore critico: {e}")
+                st.error(f"Errore critico: Assicurati che il file non sia corrotto o bloccato da Excel.")
