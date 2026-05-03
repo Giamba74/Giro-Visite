@@ -190,6 +190,22 @@ def pulisci_nome(nome):
     nome = nome.replace('SAN ', 'S ').replace('SANTA ', 'S ')
     return ' '.join(nome.split())
 
+# --- FUNZIONE MAGICA PER LE COORDINATE ITALIANE ---
+def pulisci_coordinata(coord_str):
+    if pd.isna(coord_str) or str(coord_str).strip() == "": return None
+    c = str(coord_str).strip()
+    if isinstance(coord_str, (int, float)): return float(coord_str)
+    
+    if '.' in c and ',' in c:
+        if c.rfind(',') > c.rfind('.'):
+            c = c.replace('.', '').replace(',', '.') # Formato Ita: 43.463,12 -> 43463.12
+        else:
+            c = c.replace(',', '') # Formato USA: 43,463.12 -> 43463.12
+    elif ',' in c:
+        c = c.replace(',', '.') # Converte virgola italiana in punto
+    try: return float(c)
+    except: return None
+
 # --- APP START ---
 try: ws, ws_ai, ws_mem, ws_pot = connect_db()
 except: ws, ws_ai, ws_mem, ws_pot = None, None, None, None
@@ -280,12 +296,12 @@ else:
                 for i, p in enumerate(raw):
                     prog_bar.progress((i + 1) / len(raw), text=f"🔍 Mappatura: {p[c_nom]}")
                     
-                    if c_lat and c_lon and pd.notna(p.get(c_lat)) and pd.notna(p.get(c_lon)) and str(p[c_lat]).strip():
-                        try:
-                            p['g_data'] = {'coords': (float(str(p[c_lat]).replace(',','.')), float(str(p[c_lon]).replace(',','.'))), 'found': True, 'tel': ''}
-                        except:
-                            res = get_geo_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_nom]}, {p[c_com]}"], fallback_city=p[c_com])
-                            p['g_data'] = res if res and res['found'] else {'coords': SEDE_COORDS, 'found': False, 'is_fallback': False, 'tel': ''}
+                    # Usa la nuova funzione pulisci_coordinata
+                    lat_val = pulisci_coordinata(p.get(c_lat)) if c_lat else None
+                    lon_val = pulisci_coordinata(p.get(c_lon)) if c_lon else None
+                    
+                    if lat_val and lon_val:
+                        p['g_data'] = {'coords': (lat_val, lon_val), 'found': True, 'tel': ''}
                     else:
                         if 'g_data' not in p:
                             res = get_geo_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_nom]}, {p[c_com]}"], fallback_city=p[c_com])
@@ -417,10 +433,11 @@ else:
                     df_prem = df[df[c_prem].str.upper().str.contains("SI", na=False)].copy()
                     violazione = False; vicini = []
                     for _, row in df_prem.iterrows():
-                        # Controllo Lat/Lon dal foglio prima di chiamare il server
-                        if c_lat and c_lon and pd.notna(row.get(c_lat)) and pd.notna(row.get(c_lon)) and str(row[c_lat]).strip():
-                            try: p_c = (float(str(row[c_lat]).replace(',','.')), float(str(row[c_lon]).replace(',','.')))
-                            except: p_c = None
+                        lat_val = pulisci_coordinata(row.get(c_lat)) if c_lat else None
+                        lon_val = pulisci_coordinata(row.get(c_lon)) if c_lon else None
+                        
+                        if lat_val and lon_val:
+                            p_c = (lat_val, lon_val)
                         else:
                             p_res = get_geo_data([f"{row[c_ind]}, {row[c_com]}, Italy"], fallback_city=row[c_com])
                             p_c = p_res['coords'] if p_res else None
@@ -439,9 +456,9 @@ else:
 
         st.divider()
         
-        # --- CARICAMENTO FILE TELEMACO (MOTORE ENTERPRISE V5.8) ---
+        # --- CARICAMENTO FILE TELEMACO (MOTORE ENTERPRISE V5.9) ---
         st.markdown("### 📂 Carica Lista Telemaco/InfoCamere")
-        st.write("Carica il file Excel delle nuove aperture. L'IA rimuoverà i già clienti e calcolerà i 150m con il Motore Enterprise.")
+        st.write("Carica il file Excel delle nuove aperture. L'IA rimuoverà i già clienti e calcolerà i 150m con il Motore Enterprise V5.9 (Supporto Numeri Italiani).")
         
         file_tel = st.file_uploader("Trascina qui il file (Excel o CSV)", type=['xlsx', 'xls', 'csv'])
         
@@ -492,9 +509,8 @@ else:
                     else:
                         df_prem = df[df[c_prem].str.upper().str.contains("SI", na=False)].copy()
                         
-                        # --- FASE 1 ENTERPRISE: Legge dal file se ci sono, altrimenti cerca ---
                         if 'premium_coords_cache' not in st.session_state or len(st.session_state.premium_coords_cache) != len(df_prem):
-                            st.info("⚡ FASE 1/2: Sto mappando i tuoi clienti Premium. Se hai aggiunto Lat/Lon al tuo Foglio Excel, questo passaggio sarà istantaneo!")
+                            st.info("⚡ FASE 1/2: Lettura istantanea dei tuoi clienti Premium...")
                             prog_prem = st.progress(0)
                             premium_coords_cache = []
                             total_prem = len(df_prem)
@@ -502,14 +518,12 @@ else:
                             for i, (_, p_row) in enumerate(df_prem.iterrows()):
                                 prog_prem.progress((i + 1) / total_prem, text=f"📍 Mappatura Premium {i+1} di {total_prem}...")
                                 
-                                # Cerca prima le colonne LATITUDINE e LONGITUDINE nel foglio
-                                if c_lat and c_lon and pd.notna(p_row.get(c_lat)) and pd.notna(p_row.get(c_lon)) and str(p_row[c_lat]).strip():
-                                    try:
-                                        p_c = (float(str(p_row[c_lat]).replace(',','.')), float(str(p_row[c_lon]).replace(',','.')))
-                                        premium_coords_cache.append(p_c)
-                                    except: pass
+                                lat_val = pulisci_coordinata(p_row.get(c_lat)) if c_lat else None
+                                lon_val = pulisci_coordinata(p_row.get(c_lon)) if c_lon else None
+                                
+                                if lat_val and lon_val:
+                                    premium_coords_cache.append((lat_val, lon_val))
                                 else:
-                                    # Se non ci sono nel foglio, le cerca su internet (lentamente)
                                     p_res = get_geo_data([f"{p_row[c_ind]}, {p_row[c_com]}, Italy"], fallback_city=p_row[c_com])
                                     if p_res and p_res['coords']:
                                         premium_coords_cache.append(p_res['coords'])
@@ -580,7 +594,7 @@ else:
                                     scartati_clienti += 1
                                     continue 
                                     
-                                # --- FASE 2: Controllo Radar (Veloce!) ---
+                                # --- FASE 2: Controllo Radar ---
                                 t_res = get_geo_data([f"{ind_target}, {riga[col_com_tel]}, Italy"])
                                 t_coords = t_res['coords'] if t_res else None
                                 
