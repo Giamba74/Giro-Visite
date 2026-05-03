@@ -142,13 +142,12 @@ def get_walking_distance(coords1, coords2):
     return int(geodesic(coords1, coords2).meters * 1.3)
 
 def get_geo_data(query_list, fallback_city=""):
-    # ⚠️ ANTI-CRASH: Gestione migliorata e timeout allungato
     geolocator = Nominatim(user_agent=f"brightstar_crm_app_v5_safe_{int(time.time())}")
-    time.sleep(1.5) # Sleep essenziale per non farsi bannare
+    time.sleep(1.5)
     
     for q in query_list:
         try:
-            location = geolocator.geocode(q, timeout=10) # Timeout allungato
+            location = geolocator.geocode(q, timeout=10)
             if location: return {"coords": (location.latitude, location.longitude), "tel": "", "found": True, "is_fallback": False}
         except Exception as e: 
             print(f"Errore Geo: {e}")
@@ -215,7 +214,6 @@ else:
     c_prem = next((c for c in df.columns if "PREMIUM" in c), None)
     c_piva = next((c for c in df.columns if "P.IVA" in c or "PIVA" in c), None)
     
-    # Pulizia aggressiva dei CAP nel database principale
     if "CAP" in df.columns: 
         df[c_cap] = df[c_cap].astype(str).str.replace('.0','').str.strip().str.zfill(5)
 
@@ -417,7 +415,7 @@ else:
 
         st.divider()
         
-        # --- CARICAMENTO FILE TELEMACO ---
+        # --- CARICAMENTO FILE TELEMACO CON DEBUG ---
         st.markdown("### 📂 Carica Lista Telemaco/InfoCamere")
         st.write("Carica il file Excel delle nuove aperture. L'IA filtrerà le tue zone esatte (Comuni e CAP), rimuoverà i già clienti e calcolerà i 150m.")
         
@@ -425,11 +423,10 @@ else:
         
         if file_tel:
             try:
-                # ⚠️ Gestione intelligente del formato CSV di Telemaco (sep=None e engine='python' per evitare errori di formato)
                 if file_tel.name.endswith('.csv'): df_tel = pd.read_csv(file_tel, sep=None, engine='python')
                 else: df_tel = pd.read_excel(file_tel)
                 
-                st.success("File letto correttamente! Imposta le colonne (se è Telemaco, l'indirizzo si compone in automatico):")
+                st.success("File letto correttamente! Imposta le colonne:")
                 
                 c_t1, c_t2, c_t3 = st.columns(3)
                 with c_t1: col_nome_tel = st.selectbox("Colonna NOME:", df_tel.columns, index=list(df_tel.columns).index('Denominazione') if 'Denominazione' in df_tel.columns else 0)
@@ -441,7 +438,7 @@ else:
                 usa_filtro_cap = st.checkbox("📮 Applica Filtro CAP (Scarta i CAP che non ho in portafoglio)", value=True)
                 
                 if st.button("🚀 AVVIA SCANSIONE IA SULLA LISTA", type="primary", use_container_width=True):
-                    st.info("Inizio scansione intelligente... (L'indirizzo verrà unito automaticamente se è file Telemaco)")
+                    st.info("Inizio scansione intelligente...")
                     
                     df_prem = df[df[c_prem].str.upper().str.contains("SI", na=False)].copy()
                     nomi_esistenti = df[c_nom].astype(str).str.upper().str.strip().tolist()
@@ -457,6 +454,10 @@ else:
                     scartati_clienti = 0
                     scartati_radar = 0
                     scartati_gps = 0 
+                    
+                    # --- LISTE DI DEBUG PER CAPIRE L'ERRORE ---
+                    debug_comuni_scartati = []
+                    debug_cap_scartati = []
                     
                     prog_tel = st.progress(0)
                     
@@ -477,18 +478,20 @@ else:
                             if usa_filtro_zona:
                                 if comune_target not in mappa_zone:
                                     scartati_zona += 1
+                                    debug_comuni_scartati.append(comune_target) # SALVO IL NOME DEL COMUNE SCARTATO
                                     continue
                                 if usa_filtro_cap and cap_target and len(mappa_zone.get(comune_target, [])) > 0:
                                     if cap_target not in mappa_zone[comune_target]:
                                         scartati_zona += 1
+                                        debug_cap_scartati.append(f"{comune_target} (CAP: {cap_target})") # SALVO IL CAP SCARTATO
                                         continue
                                 
-                            # FILTRO 2: GIA' CLIENTI (Solo per Nome)
+                            # FILTRO 2: GIA' CLIENTI
                             if n_az.upper() in nomi_esistenti:
                                 scartati_clienti += 1
                                 continue 
                                 
-                            # FILTRO 3: RADAR 150m (Protetto dal Try-Except interno)
+                            # FILTRO 3: RADAR 150m
                             t_coords = get_geo_data([f"{ind_target}, {riga[col_com_tel]}, Italy"])[0]
                             if t_coords:
                                 violazione = False
@@ -505,8 +508,6 @@ else:
                                 scartati_gps += 1
                                 risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), "", n_az, ind_target, str(riga[col_com_tel]), "⚠️ Mappa Fallita (Verifica a mano)", f"CAP: {cap_target}"])
                         except Exception as inner_e:
-                            # ⚠️ Se fallisce una singola riga, la scarta ma non fa crashare l'app!
-                            print(f"Skipping row {idx} due to error: {inner_e}")
                             continue
                             
                     prog_tel.empty()
@@ -518,12 +519,22 @@ else:
                     c_rep3.metric("🔴 < 150m", scartati_radar)
                     c_rep4.metric("⚠️ Mappa Fallita (Salvati)", scartati_gps)
                     
+                    # --- MOSTRA IL DEBUG A SCHERMO ---
+                    if scartati_zona > 0:
+                        with st.expander("🔍 DEBUG: Vedi esattamente quali città o CAP sono stati scartati", expanded=True):
+                            if debug_comuni_scartati:
+                                st.write("**Comuni non trovati nel tuo Foglio 1 (oppure scritti diversamente):**")
+                                st.write(list(set(debug_comuni_scartati)))
+                            if debug_cap_scartati:
+                                st.write("**Città corrette ma con CAP non trovati nel tuo Foglio 1:**")
+                                st.write(list(set(debug_cap_scartati)))
+                    
                     if risultati_positivi:
                         st.success(f"🎯 Trovati {len(risultati_positivi)} target potenziali!")
                         for r in risultati_positivi: ws_pot.append_row(r)
                         st.balloons()
                         st.info("Ricarica la pagina per vederli nella tabella in alto.")
                     else:
-                        st.warning("Nessun nuovo target rilevato. Prova a disattivare i filtri geografici.")
+                        st.warning("Nessun nuovo target rilevato. Controlla il box Debug qui sopra per capire cosa è andato storto!")
             except Exception as e:
-                st.error(f"Errore critico di sistema durante la lettura: {e}")
+                st.error(f"Errore critico di sistema: {e}")
