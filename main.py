@@ -4,8 +4,6 @@ import numpy as np
 from geopy.distance import geodesic
 from geopy.geocoders import Nominatim
 from datetime import datetime, timedelta
-import urllib.parse
-import requests
 import gspread
 from google.oauth2.service_account import Credentials
 import pytz
@@ -13,6 +11,7 @@ import json
 import copy
 import time
 import re
+import io
 
 # --- CONFIGURAZIONE ---
 st.set_page_config(page_title="Brightstar CRM PRO", page_icon="💎", layout="wide")
@@ -32,7 +31,6 @@ st.markdown("""
     .strategy-box { padding: 12px 16px; border-radius: 10px; margin-bottom: 18px; font-size: 0.95em; color: #e2e8f0; border-left: 5px solid; background: rgba(0,0,0,0.25); font-weight: 500; }
     .info-row { display: flex; gap: 15px; color: #94a3b8; font-size: 0.95rem; margin-bottom: 8px; font-weight: 500;}
     .highlight { color: #38bdf8; font-weight: 700; }
-    .real-traffic { color: #fbbf24; font-size: 0.85rem; font-weight: 600; background: rgba(251, 191, 36, 0.1); padding: 2px 8px; border-radius: 6px;}
     .ai-badge { font-size: 0.8rem; background-color: rgba(51, 65, 85, 0.8); color: #cbd5e1; padding: 3px 10px; border-radius: 6px; font-weight: 600;}
     .badge { padding: 4px 10px; border-radius: 8px; margin-right: 8px; font-size: 0.75rem; text-transform: uppercase; font-weight: 700; display: inline-block; margin-bottom: 5px;}
     .forced-badge { background: rgba(251, 191, 36, 0.15); color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.4); }
@@ -464,216 +462,156 @@ else:
 
         st.divider()
         
-        # --- CARICAMENTO FILE TELEMACO (MOTORE ENTERPRISE V5.14 MODALITÀ CECCHINO) ---
+        # --- CARICAMENTO FILE TELEMACO (MOTORE ENTERPRISE V5.15 MULTI-FORMAT) ---
         st.markdown("### 📂 Carica Lista Telemaco/InfoCamere")
-        st.write("L'IA rimuoverà i già clienti e calcolerà i 150m con scansione istantanea.")
+        st.write("L'IA rimuoverà i già clienti e calcolerà i 150m. Lettura automatica di tutti i formati.")
         
         file_tel = st.file_uploader("Trascina qui il file (Excel o CSV)", type=['xlsx', 'xls', 'csv'])
         
         if file_tel:
             try:
+                # --- LOGICA DI LETTURA AVANZATA ---
                 if file_tel.name.endswith('.csv'):
-                    try: df_tel = pd.read_csv(file_tel, sep=';', encoding='latin1', dtype=str)
+                    raw_data = file_tel.read()
+                    try:
+                        # Prova con Punto e Virgola (;)
+                        df_tel = pd.read_csv(io.BytesIO(raw_data), sep=';', encoding='latin1', dtype=str)
+                        if len(df_tel.columns) <= 1: raise Exception()
                     except:
-                        file_tel.seek(0)
-                        df_tel = pd.read_csv(file_tel, sep=',', encoding='utf-8', dtype=str)
+                        try:
+                            # Prova con Virgola (,)
+                            df_tel = pd.read_csv(io.BytesIO(raw_data), sep=',', encoding='utf-8', dtype=str)
+                            if len(df_tel.columns) <= 1: raise Exception()
+                        except:
+                            # Prova con Tab (\t)
+                            df_tel = pd.read_csv(io.BytesIO(raw_data), sep='\t', encoding='utf-16', dtype=str)
                 else:
                     df_tel = pd.read_excel(file_tel, dtype=str)
                 
-                st.success("File letto correttamente!")
-                st.write("👀 **Anteprima del file caricato:**")
+                st.success(f"File letto correttamente! Rilevate {len(df_tel.columns)} colonne.")
+                st.write("👀 **Anteprima dei dati rilevati:**")
                 st.dataframe(df_tel.head(3), use_container_width=True)
                 
-                st.markdown("#### ⚙️ Associa le Colonne (Campi Obbligatori)")
+                st.markdown("#### ⚙️ Associa le Colonne")
                 c_t1, c_t2, c_t3, c_t4 = st.columns(4)
                 
-                idx_nome = list(df_tel.columns).index('Denominazione') if 'Denominazione' in df_tel.columns else 0
+                # Tentativi di auto-matching intelligente
+                idx_nome = next((i for i, c in enumerate(df_tel.columns) if "DENOMINAZIONE" in c.upper()), 0)
                 with c_t1: col_nome_tel = st.selectbox("Colonna NOME AZIENDA:", df_tel.columns, index=idx_nome)
                 
-                idx_comune = list(df_tel.columns).index('Comune') if 'Comune' in df_tel.columns else 0
+                idx_comune = next((i for i, c in enumerate(df_tel.columns) if "COMUNE" in c.upper()), 0)
                 with c_t2: col_com_tel = st.selectbox("Colonna COMUNE:", df_tel.columns, index=idx_comune)
                 
                 opzioni_piva = ["Nessuna"] + list(df_tel.columns)
-                idx_piva_def = opzioni_piva.index('Partita IVA') if 'Partita IVA' in opzioni_piva else (opzioni_piva.index('P.IVA') if 'P.IVA' in opzioni_piva else 0)
+                idx_piva_def = next((i for i, c in enumerate(opzioni_piva) if "P.IVA" in str(c).upper() or "PARTITA IVA" in str(c).upper()), 0)
                 with c_t3: col_piva_tel = st.selectbox("Colonna PARTITA IVA:", opzioni_piva, index=idx_piva_def)
                 
-                idx_cap = list(df_tel.columns).index('Cap') if 'Cap' in df_tel.columns else 0
+                idx_cap = next((i for i, c in enumerate(df_tel.columns) if "CAP" in c.upper()), 0)
                 with c_t4: col_cap_tel = st.selectbox("Colonna CAP:", df_tel.columns, index=idx_cap)
                 
                 st.markdown("#### ⚡ Coordinate per scansione Istantanea")
                 c_c1, c_c2 = st.columns(2)
                 opzioni_coord = ["Nessuna (Cerca online lentamente)"] + list(df_tel.columns)
                 
-                idx_lat_tel = opzioni_coord.index('Latitude') if 'Latitude' in opzioni_coord else (opzioni_coord.index('LATITUDINE') if 'LATITUDINE' in opzioni_coord else 0)
-                idx_lon_tel = opzioni_coord.index('Longitude') if 'Longitude' in opzioni_coord else (opzioni_coord.index('LONGITUDINE') if 'LONGITUDINE' in opzioni_coord else 0)
+                idx_lat_tel = next((i for i, c in enumerate(opzioni_coord) if "LAT" in str(c).upper()), 0)
+                idx_lon_tel = next((i for i, c in enumerate(opzioni_coord) if "LON" in str(c).upper()), 0)
                 
                 with c_c1: col_lat_tel = st.selectbox("Colonna LATITUDINE:", opzioni_coord, index=idx_lat_tel)
                 with c_c2: col_lon_tel = st.selectbox("Colonna LONGITUDINE:", opzioni_coord, index=idx_lon_tel)
 
                 st.markdown("<hr style='border:1px solid rgba(255,255,255,0.05);'>", unsafe_allow_html=True)
-                st.markdown("#### 🎯 LA MODALITÀ CECCHINO AUTOMATICO:")
+                st.markdown("#### 🎯 MODALITÀ CECCHINO AUTOMATICO:")
                 
                 comuni_nel_file = sorted(df_tel[col_com_tel].astype(str).str.upper().str.strip().unique().tolist())
                 comuni_db_puliti = [pulisci_nome(c) for c in df[c_com].dropna().astype(str).unique()]
                 
-                # L'interruttore "Magico"
-                modalita_cecchino = st.toggle("🎯 ATTIVA MODALITÀ CECCHINO (Super Consigliata)", value=True)
+                modalita_cecchino = st.toggle("🎯 ATTIVA MODALITÀ CECCHINO", value=True)
                 
                 if modalita_cecchino:
-                    st.success("✅ **TUTTO AUTOMATICO!** L'IA incrocerà l'intero file Telemaco filtrando solo per i Comuni e i CAP in cui hai già clienti. I filtri sono impostati automaticamente al massimo della precisione.")
+                    st.success("✅ **AUTOMATICO!** Filtro attivo solo per i TUOI Comuni e i TUOI CAP.")
                     comuni_selezionati = [c for c in comuni_nel_file if pulisci_nome(c) in comuni_db_puliti]
-                    usa_filtro_cap = True  # FORZATO ACCESO!
+                    usa_filtro_cap = True
                 else:
-                    st.warning("Hai disattivato il Cecchino. Scegli a mano i Comuni da controllare:")
-                    default_sel = [c for c in comuni_nel_file if pulisci_nome(c) in comuni_db_puliti]
-                    comuni_selezionati = st.multiselect("Seleziona Comuni:", comuni_nel_file, default=default_sel)
-                    usa_filtro_cap = st.checkbox("📮 SCARTA i bar che sono fuori dai miei CAP (Filtro Precisione)", value=True)
+                    comuni_selezionati = st.multiselect("Seleziona Comuni:", comuni_nel_file, default=[c for c in comuni_nel_file if pulisci_nome(c) in comuni_db_puliti])
+                    usa_filtro_cap = st.checkbox("📮 SCARTA i bar che sono fuori dai miei CAP", value=True)
                 
                 if st.button("🚀 AVVIA SCANSIONE IA SULLA LISTA", type="primary", use_container_width=True):
                     if not comuni_selezionati:
-                        st.error("⚠️ Nessun comune valido trovato nel file per le tue zone! Riprova.")
+                        st.error("⚠️ Nessun comune trovato per le tue zone! Controlla l'associazione colonne.")
                     else:
                         df_prem = df[df[c_prem].str.upper().str.contains("SI", na=False)].copy()
                         
-                        if 'premium_coords_cache' not in st.session_state or len(st.session_state.premium_coords_cache) != len(df_prem):
-                            st.info("⚡ FASE 1/2: Lettura istantanea dei tuoi clienti Premium...")
-                            prog_prem = st.progress(0)
+                        if 'premium_coords_cache' not in st.session_state:
+                            st.info("⚡ FASE 1/2: Lettura Premium...")
                             premium_coords_cache = []
-                            total_prem = len(df_prem)
-                            
                             for i, (_, p_row) in enumerate(df_prem.iterrows()):
-                                prog_prem.progress((i + 1) / total_prem, text=f"📍 Mappatura Premium {i+1} di {total_prem}...")
-                                
-                                lat_val = pulisci_coordinata_italy(p_row.get(c_lat), True) if c_lat else None
-                                lon_val = pulisci_coordinata_italy(p_row.get(c_lon), False) if c_lon else None
-                                
-                                if lat_val and lon_val:
-                                    premium_coords_cache.append((lat_val, lon_val))
+                                lat_val = pulisci_coordinata_italy(p_row.get(c_lat), True)
+                                lon_val = pulisci_coordinata_italy(p_row.get(c_lon), False)
+                                if lat_val and lon_val: premium_coords_cache.append((lat_val, lon_val))
                                 else:
                                     p_res = get_geo_data([f"{p_row[c_ind]}, {p_row[c_com]}, Italy"], fallback_city=p_row[c_com])
-                                    if p_res and p_res['coords']:
-                                        premium_coords_cache.append(p_res['coords'])
-                            
+                                    if p_res: premium_coords_cache.append(p_res['coords'])
                             st.session_state.premium_coords_cache = premium_coords_cache
-                            prog_prem.empty()
-                            st.success(f"✅ Memorizzati {len(premium_coords_cache)} clienti Premium!")
-                        else:
-                            st.success("⚡ FASE 1/2: Mappe Premium lette istantaneamente dalla memoria!")
                         
-                        st.info("🔍 FASE 2/2: Setaccio Automatico del file in corso...")
                         premium_coords_cache = st.session_state.premium_coords_cache
-                        
                         nomi_esistenti_puliti = [pulisci_nome(n) for n in df[c_nom].astype(str).tolist()]
                         pive_esistenti = [str(p).strip() for p in df[c_piva].astype(str).tolist()] if c_piva else []
                         
                         mappa_zone = {}
                         for comune, cap_list in df.groupby(c_com)[c_cap].unique().items():
-                            if pd.isna(comune) or not str(comune).strip(): continue
-                            mappa_zone[pulisci_nome(str(comune))] = [str(c).replace('.0','').strip().zfill(5) for c in cap_list if pd.notna(c) and str(c).strip() != ""]
+                            mappa_zone[pulisci_nome(str(comune))] = [str(c).replace('.0','').strip().zfill(5) for c in cap_list if pd.notna(c)]
                         
                         risultati_positivi = []
-                        scartati_zona = 0
-                        scartati_clienti = 0
-                        scartati_radar = 0
-                        scartati_gps = 0 
+                        scartati_zona = 0; scartati_clienti = 0; scartati_radar = 0; scartati_gps = 0 
                         
-                        debug_cap_scartati = []
                         prog_tel = st.progress(0)
-                        
                         for idx, riga in df_tel.iterrows():
                             try:
-                                prog_tel.progress((idx + 1) / len(df_tel), text=f"Setaccio: riga {idx + 1}/{len(df_tel)}")
-                                n_az = str(riga[col_nome_tel]).strip()
-                                n_az_pulito = pulisci_nome(n_az)
-                                
+                                prog_tel.progress((idx + 1) / len(df_tel))
+                                n_az = str(riga[col_nome_tel]).strip(); n_az_pulito = pulisci_nome(n_az)
                                 comune_target = str(riga[col_com_tel]).upper().strip()
                                 cap_target = str(riga[col_cap_tel]).replace('.0', '').strip().zfill(5) if col_cap_tel else ""
                                 
-                                if 'Toponimo' in df_tel.columns and 'Via' in df_tel.columns and 'N civico' in df_tel.columns:
-                                    ind_target = f"{str(riga['Toponimo']).strip()} {str(riga['Via']).strip()} {str(riga['N civico']).replace('.0','').strip()}".replace('nan', '').strip()
-                                elif 'Indirizzo' in df_tel.columns:
-                                    ind_target = str(riga['Indirizzo']).strip()
-                                else:
-                                    ind_target = ""
-                                    
                                 if comune_target not in comuni_selezionati:
-                                    scartati_zona += 1
-                                    continue
+                                    scartati_zona += 1; continue
                                     
                                 if usa_filtro_cap and cap_target:
-                                    comune_tel_pulito = pulisci_nome(comune_target)
-                                    caps_ammessi = mappa_zone.get(comune_tel_pulito, [])
-                                    if len(caps_ammessi) > 0 and cap_target not in caps_ammessi:
-                                        scartati_zona += 1
-                                        debug_cap_scartati.append(f"{comune_target} (CAP {cap_target} scartato)")
-                                        continue
+                                    caps_ammessi = mappa_zone.get(pulisci_nome(comune_target), [])
+                                    if caps_ammessi and cap_target not in caps_ammessi:
+                                        scartati_zona += 1; continue
                                     
-                                se_piva = str(riga[col_piva_tel]).strip() if col_piva_tel and col_piva_tel != "Nessuna" else ""
-                                is_gia_cliente = False
-                                if se_piva and se_piva in pive_esistenti and se_piva != "nan":
-                                    is_gia_cliente = True
-                                else:
-                                    if n_az_pulito in nomi_esistenti_puliti:
-                                        is_gia_cliente = True
-                                
-                                if is_gia_cliente:
-                                    scartati_clienti += 1
-                                    continue 
+                                se_piva = str(riga[col_piva_tel]).strip() if col_piva_tel != "Nessuna" else ""
+                                if (se_piva and se_piva in pive_esistenti) or (n_az_pulito in nomi_esistenti_puliti):
+                                    scartati_clienti += 1; continue 
                                     
                                 t_coords = None
                                 if col_lat_tel != "Nessuna (Cerca online lentamente)" and col_lon_tel != "Nessuna (Cerca online lentamente)":
                                     t_lat = pulisci_coordinata_italy(riga.get(col_lat_tel), True)
                                     t_lon = pulisci_coordinata_italy(riga.get(col_lon_tel), False)
-                                    if t_lat and t_lon:
-                                        t_coords = (t_lat, t_lon)
+                                    if t_lat and t_lon: t_coords = (t_lat, t_lon)
                                 
                                 if not t_coords:
-                                    t_res = get_geo_data([f"{ind_target}, {riga[col_com_tel]}, Italy"])
+                                    ind_target = f"{riga.get('Via', '')} {riga.get('N civico', '')}, {comune_target}".strip()
+                                    t_res = get_geo_data([ind_target])
                                     t_coords = t_res['coords'] if t_res else None
                                 
                                 if t_coords:
-                                    violazione = False
-                                    for p_c in premium_coords_cache:
-                                        dist = get_walking_distance(t_coords, p_c)
-                                        if dist < 150:
-                                            violazione = True
-                                            break
-                                    
-                                    if not violazione:
-                                        risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, ind_target, str(riga[col_com_tel]), "✅ OK (150m Superati)", f"CAP: {cap_target}"])
-                                    else:
-                                        scartati_radar += 1
-                                else:
-                                    scartati_gps += 1
-                                    risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, ind_target, str(riga[col_com_tel]), "⚠️ Mappa Fallita (Verifica a mano)", f"CAP: {cap_target}"])
-                            except Exception as inner_e:
-                                scartati_gps += 1
-                                risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, ind_target, str(riga[col_com_tel]), f"⚠️ Errore Calcolo: Verifica a mano", f"CAP: {cap_target}"])
-                                continue
+                                    violazione = any(get_walking_distance(t_coords, p_c) < 150 for p_c in premium_coords_cache)
+                                    if not violazione: risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, "Indirizzo File", comune_target, "✅ OK", f"CAP: {cap_target}"])
+                                    else: scartati_radar += 1
+                                else: scartati_gps += 1
+                            except: continue
                                 
-                        prog_tel.empty()
-                        
-                        st.markdown("### 📊 Report Scansione")
+                        st.markdown("### 📊 Report")
                         c_rep1, c_rep2, c_rep3, c_rep4 = st.columns(4)
-                        c_rep1.metric("🌍 Scartati (Fuori dalle TUE Zone/CAP)", scartati_zona)
+                        c_rep1.metric("🌍 Scartati Zona", scartati_zona)
                         c_rep2.metric("👥 Già Clienti", scartati_clienti)
-                        c_rep3.metric("🔴 < 150m dai Premium", scartati_radar)
-                        c_rep4.metric("⚠️ Mappe Fallite", scartati_gps)
-                        
-                        if debug_cap_scartati:
-                            with st.expander("🔍 DEBUG: Vedi i CAP scartati (erano nelle tue città, ma in CAP che non fai)"):
-                                st.write(list(set(debug_cap_scartati)))
+                        c_rep3.metric("🔴 < 150m", scartati_radar)
+                        c_rep4.metric("⚠️ Errori Mappa", scartati_gps)
                         
                         if risultati_positivi:
-                            tot_ok = len([r for r in risultati_positivi if "✅ OK" in r[5]])
-                            st.success(f"🎯 BERSAGLIO! Trovati {tot_ok} target potenziali liberi! (più {scartati_gps} da verificare a mano)")
-                            try:
-                                for r in risultati_positivi: ws_pot.append_row(r)
-                                st.balloons()
-                                st.info("Ricarica la pagina: i bar sono stati aggiunti alla tabella in alto e salvati su Excel.")
-                            except Exception as e_sheet:
-                                st.error("Trovati, ma c'è stato un piccolo intoppo nel salvarli su Google Sheet. Riprova la scansione.")
-                        else:
-                            st.warning("Nessun target valido in questo file (Tutti fuori zona, già clienti o a meno di 150m dai tuoi Premium).")
+                            for r in risultati_positivi: ws_pot.append_row(r)
+                            st.success(f"🎯 Bersagli trovati: {len(risultati_positivi)}!")
+                            st.balloons()
             except Exception as e:
-                st.error(f"Errore critico: Assicurati che il file non sia corrotto o bloccato da Excel.")
+                st.error(f"Errore: {e}")
