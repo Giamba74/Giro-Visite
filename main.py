@@ -51,7 +51,7 @@ SEDE_COORDS = COORDS["Chianti"]
 
 # ==============================================================================
 # 👇 MODIFICA SOLO QUI SOTTO CON IL TUO VERO ID FOGLIO GOOGLE 👇
-ID_DEL_FOGLIO = "IL_TUO_ID_QUI" 
+ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
 # ==============================================================================
 
 @st.cache_resource
