@@ -141,11 +141,8 @@ def get_walking_distance(coords1, coords2):
         if res['code'] == 'Ok': return int(res['routes'][0]['distance'])
     except: pass
     
-    try:
-        # Questo è il punto dove il GPS andava in crash! Ora è protetto.
-        return int(geodesic(coords1, coords2).meters * 1.3)
-    except:
-        return 999999 # Se le coordinate sono assurde, dà distanza altissima invece di crashare
+    try: return int(geodesic(coords1, coords2).meters * 1.3)
+    except: return 999999 
 
 def get_geo_data(query_list, fallback_city=""):
     geolocator = Nominatim(user_agent=f"brightstar_crm_app_v5_safe_{int(time.time())}")
@@ -195,10 +192,9 @@ def pulisci_nome(nome):
     nome = nome.replace('SAN ', 'S ').replace('SANTA ', 'S ')
     return ' '.join(nome.split())
 
-# --- LA NUOVA FUNZIONE "BULLDOZER" PER LE COORDINATE ---
 def pulisci_coordinata_italy(coord_str, is_lat=True):
     if pd.isna(coord_str) or str(coord_str).strip() == "": return None
-    if hasattr(coord_str, 'year'): return None # Salta le finte date di Excel
+    if hasattr(coord_str, 'year'): return None 
     
     c = str(coord_str).strip().replace(' ', '')
     if '.' in c and ',' in c:
@@ -209,11 +205,9 @@ def pulisci_coordinata_italy(coord_str, is_lat=True):
         
     try: 
         val = float(c)
-        # Se Excel ha moltiplicato il numero a dismisura (es. 43463.12)
         while abs(val) > 90:
             val = val / 10.0
             
-        # Controlliamo che il numero sia almeno approssimativamente in Italia!
         if is_lat and (val < 35 or val > 48): return None
         if not is_lat and (val < 6 or val > 20): return None
         
@@ -470,9 +464,9 @@ else:
 
         st.divider()
         
-        # --- CARICAMENTO FILE TELEMACO (MOTORE ENTERPRISE V5.11 Bulldozer) ---
+        # --- CARICAMENTO FILE TELEMACO (MOTORE ENTERPRISE V5.14 MODALITÀ CECCHINO) ---
         st.markdown("### 📂 Carica Lista Telemaco/InfoCamere")
-        st.write("Carica il file Excel. L'IA rimuoverà i già clienti e calcolerà i 150m. (Versione Bulldozer anti-crash Excel).")
+        st.write("L'IA rimuoverà i già clienti e calcolerà i 150m con scansione istantanea.")
         
         file_tel = st.file_uploader("Trascina qui il file (Excel o CSV)", type=['xlsx', 'xls', 'csv'])
         
@@ -490,7 +484,7 @@ else:
                 st.write("👀 **Anteprima del file caricato:**")
                 st.dataframe(df_tel.head(3), use_container_width=True)
                 
-                st.markdown("#### ⚙️ Associa le Colonne")
+                st.markdown("#### ⚙️ Associa le Colonne (Campi Obbligatori)")
                 c_t1, c_t2, c_t3, c_t4 = st.columns(4)
                 
                 idx_nome = list(df_tel.columns).index('Denominazione') if 'Denominazione' in df_tel.columns else 0
@@ -506,26 +500,43 @@ else:
                 idx_cap = list(df_tel.columns).index('Cap') if 'Cap' in df_tel.columns else 0
                 with c_t4: col_cap_tel = st.selectbox("Colonna CAP:", df_tel.columns, index=idx_cap)
                 
+                st.markdown("#### ⚡ Coordinate per scansione Istantanea")
+                c_c1, c_c2 = st.columns(2)
+                opzioni_coord = ["Nessuna (Cerca online lentamente)"] + list(df_tel.columns)
+                
+                idx_lat_tel = opzioni_coord.index('Latitude') if 'Latitude' in opzioni_coord else (opzioni_coord.index('LATITUDINE') if 'LATITUDINE' in opzioni_coord else 0)
+                idx_lon_tel = opzioni_coord.index('Longitude') if 'Longitude' in opzioni_coord else (opzioni_coord.index('LONGITUDINE') if 'LONGITUDINE' in opzioni_coord else 0)
+                
+                with c_c1: col_lat_tel = st.selectbox("Colonna LATITUDINE:", opzioni_coord, index=idx_lat_tel)
+                with c_c2: col_lon_tel = st.selectbox("Colonna LONGITUDINE:", opzioni_coord, index=idx_lon_tel)
+
                 st.markdown("<hr style='border:1px solid rgba(255,255,255,0.05);'>", unsafe_allow_html=True)
-                st.markdown("#### 🎯 Seleziona le tue zone:")
+                st.markdown("#### 🎯 LA MODALITÀ CECCHINO AUTOMATICO:")
                 
                 comuni_nel_file = sorted(df_tel[col_com_tel].astype(str).str.upper().str.strip().unique().tolist())
                 comuni_db_puliti = [pulisci_nome(c) for c in df[c_com].dropna().astype(str).unique()]
                 
-                default_sel = [c_tel_name for c_tel_name in comuni_nel_file if pulisci_nome(c_tel_name) in comuni_db_puliti]
-                comuni_selezionati = st.multiselect("L'IA analizzerà SOLO i comuni che scegli qui sotto:", comuni_nel_file, default=default_sel)
+                # L'interruttore "Magico"
+                modalita_cecchino = st.toggle("🎯 ATTIVA MODALITÀ CECCHINO (Super Consigliata)", value=True)
                 
-                st.markdown("<br>", unsafe_allow_html=True)
-                usa_filtro_cap = st.checkbox("📮 SCARTA i bar che sono fuori dai miei CAP (Filtro Precisione)", value=False)
+                if modalita_cecchino:
+                    st.success("✅ **TUTTO AUTOMATICO!** L'IA incrocerà l'intero file Telemaco filtrando solo per i Comuni e i CAP in cui hai già clienti. I filtri sono impostati automaticamente al massimo della precisione.")
+                    comuni_selezionati = [c for c in comuni_nel_file if pulisci_nome(c) in comuni_db_puliti]
+                    usa_filtro_cap = True  # FORZATO ACCESO!
+                else:
+                    st.warning("Hai disattivato il Cecchino. Scegli a mano i Comuni da controllare:")
+                    default_sel = [c for c in comuni_nel_file if pulisci_nome(c) in comuni_db_puliti]
+                    comuni_selezionati = st.multiselect("Seleziona Comuni:", comuni_nel_file, default=default_sel)
+                    usa_filtro_cap = st.checkbox("📮 SCARTA i bar che sono fuori dai miei CAP (Filtro Precisione)", value=True)
                 
                 if st.button("🚀 AVVIA SCANSIONE IA SULLA LISTA", type="primary", use_container_width=True):
                     if not comuni_selezionati:
-                        st.error("⚠️ Seleziona almeno un comune dalla lista qui sopra prima di avviare!")
+                        st.error("⚠️ Nessun comune valido trovato nel file per le tue zone! Riprova.")
                     else:
                         df_prem = df[df[c_prem].str.upper().str.contains("SI", na=False)].copy()
                         
                         if 'premium_coords_cache' not in st.session_state or len(st.session_state.premium_coords_cache) != len(df_prem):
-                            st.info("⚡ FASE 1/2: Lettura istantanea dei tuoi clienti Premium (Anti-crash attivato)...")
+                            st.info("⚡ FASE 1/2: Lettura istantanea dei tuoi clienti Premium...")
                             prog_prem = st.progress(0)
                             premium_coords_cache = []
                             total_prem = len(df_prem)
@@ -549,7 +560,7 @@ else:
                         else:
                             st.success("⚡ FASE 1/2: Mappe Premium lette istantaneamente dalla memoria!")
                         
-                        st.info("🔍 FASE 2/2: Sto scansionando i nuovi Bar dal tuo file Telemaco...")
+                        st.info("🔍 FASE 2/2: Setaccio Automatico del file in corso...")
                         premium_coords_cache = st.session_state.premium_coords_cache
                         
                         nomi_esistenti_puliti = [pulisci_nome(n) for n in df[c_nom].astype(str).tolist()]
@@ -571,7 +582,7 @@ else:
                         
                         for idx, riga in df_tel.iterrows():
                             try:
-                                prog_tel.progress((idx + 1) / len(df_tel), text=f"Scansione Telemaco: riga {idx + 1}/{len(df_tel)}")
+                                prog_tel.progress((idx + 1) / len(df_tel), text=f"Setaccio: riga {idx + 1}/{len(df_tel)}")
                                 n_az = str(riga[col_nome_tel]).strip()
                                 n_az_pulito = pulisci_nome(n_az)
                                 
@@ -609,14 +620,20 @@ else:
                                     scartati_clienti += 1
                                     continue 
                                     
-                                # --- FASE 2: Controllo Radar proteso da crash ---
-                                t_res = get_geo_data([f"{ind_target}, {riga[col_com_tel]}, Italy"])
-                                t_coords = t_res['coords'] if t_res else None
+                                t_coords = None
+                                if col_lat_tel != "Nessuna (Cerca online lentamente)" and col_lon_tel != "Nessuna (Cerca online lentamente)":
+                                    t_lat = pulisci_coordinata_italy(riga.get(col_lat_tel), True)
+                                    t_lon = pulisci_coordinata_italy(riga.get(col_lon_tel), False)
+                                    if t_lat and t_lon:
+                                        t_coords = (t_lat, t_lon)
+                                
+                                if not t_coords:
+                                    t_res = get_geo_data([f"{ind_target}, {riga[col_com_tel]}, Italy"])
+                                    t_coords = t_res['coords'] if t_res else None
                                 
                                 if t_coords:
                                     violazione = False
                                     for p_c in premium_coords_cache:
-                                        # Ora il GPS non può più crashare la riga intera!
                                         dist = get_walking_distance(t_coords, p_c)
                                         if dist < 150:
                                             violazione = True
@@ -630,7 +647,6 @@ else:
                                     scartati_gps += 1
                                     risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, ind_target, str(riga[col_com_tel]), "⚠️ Mappa Fallita (Verifica a mano)", f"CAP: {cap_target}"])
                             except Exception as inner_e:
-                                # Se qualcosa va male in modo inaspettato, almeno contiamolo nelle mappe fallite per non perdere il numero!
                                 scartati_gps += 1
                                 risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, ind_target, str(riga[col_com_tel]), f"⚠️ Errore Calcolo: Verifica a mano", f"CAP: {cap_target}"])
                                 continue
@@ -639,13 +655,13 @@ else:
                         
                         st.markdown("### 📊 Report Scansione")
                         c_rep1, c_rep2, c_rep3, c_rep4 = st.columns(4)
-                        c_rep1.metric("🌍 Comuni/CAP Ignorati", scartati_zona)
+                        c_rep1.metric("🌍 Scartati (Fuori dalle TUE Zone/CAP)", scartati_zona)
                         c_rep2.metric("👥 Già Clienti", scartati_clienti)
-                        c_rep3.metric("🔴 < 150m", scartati_radar)
-                        c_rep4.metric("⚠️ Mappe Fallite / Da Verificare", scartati_gps)
+                        c_rep3.metric("🔴 < 150m dai Premium", scartati_radar)
+                        c_rep4.metric("⚠️ Mappe Fallite", scartati_gps)
                         
                         if debug_cap_scartati:
-                            with st.expander("🔍 DEBUG: Vedi i CAP scartati su città valide"):
+                            with st.expander("🔍 DEBUG: Vedi i CAP scartati (erano nelle tue città, ma in CAP che non fai)"):
                                 st.write(list(set(debug_cap_scartati)))
                         
                         if risultati_positivi:
