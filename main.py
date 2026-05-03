@@ -50,7 +50,7 @@ SEDE_COORDS = COORDS["Chianti"]
 
 # ==============================================================================
 # 👇 MODIFICA SOLO QUI SOTTO CON IL TUO VERO ID FOGLIO GOOGLE 👇
-ID_DEL_FOGLIO = "IL_TUO_ID_QUI" 
+ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
 # ==============================================================================
 
 @st.cache_resource
@@ -142,19 +142,25 @@ def get_walking_distance(coords1, coords2):
     return int(geodesic(coords1, coords2).meters * 1.3)
 
 def get_geo_data(query_list, fallback_city=""):
-    geolocator = Nominatim(user_agent="brightstar_crm_app_v5_def")
-    time.sleep(1.2)
+    # ⚠️ ANTI-CRASH: Gestione migliorata e timeout allungato
+    geolocator = Nominatim(user_agent=f"brightstar_crm_app_v5_safe_{int(time.time())}")
+    time.sleep(1.5) # Sleep essenziale per non farsi bannare
+    
     for q in query_list:
         try:
-            location = geolocator.geocode(q, timeout=5)
+            location = geolocator.geocode(q, timeout=10) # Timeout allungato
             if location: return {"coords": (location.latitude, location.longitude), "tel": "", "found": True, "is_fallback": False}
-        except: continue
+        except Exception as e: 
+            print(f"Errore Geo: {e}")
+            continue
+            
     if fallback_city:
         try:
-            time.sleep(1.2)
-            location = geolocator.geocode(f"{fallback_city}, Italy", timeout=5)
+            time.sleep(1.5)
+            location = geolocator.geocode(f"{fallback_city}, Italy", timeout=10)
             if location: return {"coords": (location.latitude, location.longitude), "tel": "", "found": True, "is_fallback": True}
         except: pass
+        
     return None
 
 def get_ai_duration(ws_log, cliente):
@@ -411,7 +417,7 @@ else:
 
         st.divider()
         
-        # --- CARICAMENTO FILE TELEMACO (AUTO-COMPOSIZIONE INDIRIZZO) ---
+        # --- CARICAMENTO FILE TELEMACO ---
         st.markdown("### 📂 Carica Lista Telemaco/InfoCamere")
         st.write("Carica il file Excel delle nuove aperture. L'IA filtrerà le tue zone esatte (Comuni e CAP), rimuoverà i già clienti e calcolerà i 150m.")
         
@@ -419,6 +425,7 @@ else:
         
         if file_tel:
             try:
+                # ⚠️ Gestione intelligente del formato CSV di Telemaco (sep=None e engine='python' per evitare errori di formato)
                 if file_tel.name.endswith('.csv'): df_tel = pd.read_csv(file_tel, sep=None, engine='python')
                 else: df_tel = pd.read_excel(file_tel)
                 
@@ -454,49 +461,54 @@ else:
                     prog_tel = st.progress(0)
                     
                     for idx, riga in df_tel.iterrows():
-                        prog_tel.progress((idx + 1) / len(df_tel))
-                        n_az = str(riga[col_nome_tel]).strip()
-                        comune_target = str(riga[col_com_tel]).upper().strip()
-                        cap_target = str(riga[col_cap_tel]).replace('.0', '').strip().zfill(5) if col_cap_tel != "Nessuna" else ""
-                        
-                        # --- UNIONE INDIRIZZO TELEMACO ---
-                        if 'Toponimo' in df_tel.columns and 'Via' in df_tel.columns and 'N civico' in df_tel.columns:
-                            ind_target = f"{str(riga['Toponimo']).strip()} {str(riga['Via']).strip()} {str(riga['N civico']).replace('.0','').strip()}".replace('nan', '').strip()
-                        else:
-                            ind_target = "" # Fallback se non è Telemaco
+                        try:
+                            prog_tel.progress((idx + 1) / len(df_tel))
+                            n_az = str(riga[col_nome_tel]).strip()
+                            comune_target = str(riga[col_com_tel]).upper().strip()
+                            cap_target = str(riga[col_cap_tel]).replace('.0', '').strip().zfill(5) if col_cap_tel != "Nessuna" else ""
                             
-                        # FILTRO 1: ZONE E CAP
-                        if usa_filtro_zona:
-                            if comune_target not in mappa_zone:
-                                scartati_zona += 1
-                                continue
-                            if usa_filtro_cap and cap_target and len(mappa_zone.get(comune_target, [])) > 0:
-                                if cap_target not in mappa_zone[comune_target]:
+                            # --- UNIONE INDIRIZZO TELEMACO ---
+                            if 'Toponimo' in df_tel.columns and 'Via' in df_tel.columns and 'N civico' in df_tel.columns:
+                                ind_target = f"{str(riga['Toponimo']).strip()} {str(riga['Via']).strip()} {str(riga['N civico']).replace('.0','').strip()}".replace('nan', '').strip()
+                            else:
+                                ind_target = ""
+                                
+                            # FILTRO 1: ZONE E CAP
+                            if usa_filtro_zona:
+                                if comune_target not in mappa_zone:
                                     scartati_zona += 1
                                     continue
-                            
-                        # FILTRO 2: GIA' CLIENTI (Solo per Nome)
-                        if n_az.upper() in nomi_esistenti:
-                            scartati_clienti += 1
-                            continue 
-                            
-                        # FILTRO 3: RADAR 150m
-                        t_coords = get_geo_data([f"{ind_target}, {riga[col_com_tel]}, Italy"])[0]
-                        if t_coords:
-                            violazione = False
-                            for _, p_row in df_prem.iterrows():
-                                p_c = get_geo_data([f"{p_row[c_ind]}, {p_row[c_com]}, Italy"], fallback_city=p_row[c_com])[0]
-                                if p_c and get_walking_distance(t_coords, p_c) < 150:
-                                    violazione = True; break
-                            
-                            if not violazione:
-                                risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), "", n_az, ind_target, str(riga[col_com_tel]), "✅ OK (Da Telemaco)", f"CAP: {cap_target}"])
+                                if usa_filtro_cap and cap_target and len(mappa_zone.get(comune_target, [])) > 0:
+                                    if cap_target not in mappa_zone[comune_target]:
+                                        scartati_zona += 1
+                                        continue
+                                
+                            # FILTRO 2: GIA' CLIENTI (Solo per Nome)
+                            if n_az.upper() in nomi_esistenti:
+                                scartati_clienti += 1
+                                continue 
+                                
+                            # FILTRO 3: RADAR 150m (Protetto dal Try-Except interno)
+                            t_coords = get_geo_data([f"{ind_target}, {riga[col_com_tel]}, Italy"])[0]
+                            if t_coords:
+                                violazione = False
+                                for _, p_row in df_prem.iterrows():
+                                    p_c = get_geo_data([f"{p_row[c_ind]}, {p_row[c_com]}, Italy"], fallback_city=p_row[c_com])[0]
+                                    if p_c and get_walking_distance(t_coords, p_c) < 150:
+                                        violazione = True; break
+                                
+                                if not violazione:
+                                    risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), "", n_az, ind_target, str(riga[col_com_tel]), "✅ OK (Da Telemaco)", f"CAP: {cap_target}"])
+                                else:
+                                    scartati_radar += 1
                             else:
-                                scartati_radar += 1
-                        else:
-                            scartati_gps += 1
-                            risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), "", n_az, ind_target, str(riga[col_com_tel]), "⚠️ Mappa Fallita (Verifica a mano)", f"CAP: {cap_target}"])
-                    
+                                scartati_gps += 1
+                                risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), "", n_az, ind_target, str(riga[col_com_tel]), "⚠️ Mappa Fallita (Verifica a mano)", f"CAP: {cap_target}"])
+                        except Exception as inner_e:
+                            # ⚠️ Se fallisce una singola riga, la scarta ma non fa crashare l'app!
+                            print(f"Skipping row {idx} due to error: {inner_e}")
+                            continue
+                            
                     prog_tel.empty()
                     
                     st.markdown("### 📊 Report Scansione")
@@ -514,4 +526,4 @@ else:
                     else:
                         st.warning("Nessun nuovo target rilevato. Prova a disattivare i filtri geografici.")
             except Exception as e:
-                st.error(f"Errore: {e}")
+                st.error(f"Errore critico di sistema durante la lettura: {e}")
