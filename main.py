@@ -144,7 +144,7 @@ def get_walking_distance(coords1, coords2):
 
 def get_geo_data(query_list, fallback_city=""):
     geolocator = Nominatim(user_agent=f"brightstar_crm_app_v5_safe_{int(time.time())}")
-    time.sleep(1.5) # Pausa obbligatoria per non farsi bloccare da internet
+    time.sleep(1.5) 
     for q in query_list:
         try:
             location = geolocator.geocode(q, timeout=10)
@@ -218,6 +218,9 @@ else:
     c_prem = next((c for c in df.columns if "PREMIUM" in c), None)
     c_piva = next((c for c in df.columns if "P.IVA" in c or "PIVA" in c), None)
     
+    c_lat = next((c for c in df.columns if "LATITUDINE" in c), None)
+    c_lon = next((c for c in df.columns if "LONGITUDINE" in c), None)
+    
     if "CAP" in df.columns: 
         df[c_cap] = df[c_cap].astype(str).str.replace('.0','').str.strip().str.zfill(5)
 
@@ -276,9 +279,17 @@ else:
                 pool_pronta = []
                 for i, p in enumerate(raw):
                     prog_bar.progress((i + 1) / len(raw), text=f"🔍 Mappatura: {p[c_nom]}")
-                    if 'g_data' not in p:
-                        res = get_geo_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_nom]}, {p[c_com]}"], fallback_city=p[c_com])
-                        p['g_data'] = res if res and res['found'] else {'coords': SEDE_COORDS, 'found': False, 'is_fallback': False, 'tel': ''}
+                    
+                    if c_lat and c_lon and pd.notna(p.get(c_lat)) and pd.notna(p.get(c_lon)) and str(p[c_lat]).strip():
+                        try:
+                            p['g_data'] = {'coords': (float(str(p[c_lat]).replace(',','.')), float(str(p[c_lon]).replace(',','.'))), 'found': True, 'tel': ''}
+                        except:
+                            res = get_geo_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_nom]}, {p[c_com]}"], fallback_city=p[c_com])
+                            p['g_data'] = res if res and res['found'] else {'coords': SEDE_COORDS, 'found': False, 'is_fallback': False, 'tel': ''}
+                    else:
+                        if 'g_data' not in p:
+                            res = get_geo_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_nom]}, {p[c_com]}"], fallback_city=p[c_com])
+                            p['g_data'] = res if res and res['found'] else {'coords': SEDE_COORDS, 'found': False, 'is_fallback': False, 'tel': ''}
                     pool_pronta.append(p)
                 prog_bar.empty()
 
@@ -406,8 +417,14 @@ else:
                     df_prem = df[df[c_prem].str.upper().str.contains("SI", na=False)].copy()
                     violazione = False; vicini = []
                     for _, row in df_prem.iterrows():
-                        p_res = get_geo_data([f"{row[c_ind]}, {row[c_com]}, Italy"], fallback_city=row[c_com])
-                        p_c = p_res['coords'] if p_res else None
+                        # Controllo Lat/Lon dal foglio prima di chiamare il server
+                        if c_lat and c_lon and pd.notna(row.get(c_lat)) and pd.notna(row.get(c_lon)) and str(row[c_lat]).strip():
+                            try: p_c = (float(str(row[c_lat]).replace(',','.')), float(str(row[c_lon]).replace(',','.')))
+                            except: p_c = None
+                        else:
+                            p_res = get_geo_data([f"{row[c_ind]}, {row[c_com]}, Italy"], fallback_city=row[c_com])
+                            p_c = p_res['coords'] if p_res else None
+                            
                         if p_c:
                             dist = get_walking_distance(t_coords, p_c)
                             if dist < 150: violazione = True; vicini.append(f"{row[c_nom]} ({dist} m)")
@@ -422,9 +439,9 @@ else:
 
         st.divider()
         
-        # --- CARICAMENTO FILE TELEMACO (MOTORE TURBO V5.7) ---
+        # --- CARICAMENTO FILE TELEMACO (MOTORE ENTERPRISE V5.8) ---
         st.markdown("### 📂 Carica Lista Telemaco/InfoCamere")
-        st.write("Carica il file Excel delle nuove aperture. L'IA rimuoverà i già clienti e calcolerà i 150m con il Motore Turbo.")
+        st.write("Carica il file Excel delle nuove aperture. L'IA rimuoverà i già clienti e calcolerà i 150m con il Motore Enterprise.")
         
         file_tel = st.file_uploader("Trascina qui il file (Excel o CSV)", type=['xlsx', 'xls', 'csv'])
         
@@ -469,22 +486,42 @@ else:
                 if usa_filtro_cap: col_cap_tel = st.selectbox("Colonna CAP:", list(df_tel.columns), index=list(df_tel.columns).index('Cap') if 'Cap' in df_tel.columns else 0)
                 else: col_cap_tel = None
                 
-                if st.button("🚀 AVVIA SCANSIONE IA SULLA LISTA (MOTORE TURBO)", type="primary", use_container_width=True):
+                if st.button("🚀 AVVIA SCANSIONE IA SULLA LISTA (MOTORE ENTERPRISE)", type="primary", use_container_width=True):
                     if not comuni_selezionati:
                         st.error("⚠️ Seleziona almeno un comune dalla lista qui sopra prima di avviare!")
                     else:
-                        st.info("⚡ FASE 1/2: Mappatura veloce dei tuoi clienti Premium...")
-                        
                         df_prem = df[df[c_prem].str.upper().str.contains("SI", na=False)].copy()
                         
-                        # --- IL MOTORE TURBO: Salva in memoria le posizioni Premium una volta sola! ---
-                        premium_coords_cache = []
-                        for _, p_row in df_prem.iterrows():
-                            p_res = get_geo_data([f"{p_row[c_ind]}, {p_row[c_com]}, Italy"], fallback_city=p_row[c_com])
-                            if p_res and p_res['coords']:
-                                premium_coords_cache.append(p_res['coords'])
+                        # --- FASE 1 ENTERPRISE: Legge dal file se ci sono, altrimenti cerca ---
+                        if 'premium_coords_cache' not in st.session_state or len(st.session_state.premium_coords_cache) != len(df_prem):
+                            st.info("⚡ FASE 1/2: Sto mappando i tuoi clienti Premium. Se hai aggiunto Lat/Lon al tuo Foglio Excel, questo passaggio sarà istantaneo!")
+                            prog_prem = st.progress(0)
+                            premium_coords_cache = []
+                            total_prem = len(df_prem)
+                            
+                            for i, (_, p_row) in enumerate(df_prem.iterrows()):
+                                prog_prem.progress((i + 1) / total_prem, text=f"📍 Mappatura Premium {i+1} di {total_prem}...")
                                 
-                        st.success(f"✅ Memorizzati {len(premium_coords_cache)} clienti Premium! FASE 2/2: Controllo dei nuovi Bar in corso...")
+                                # Cerca prima le colonne LATITUDINE e LONGITUDINE nel foglio
+                                if c_lat and c_lon and pd.notna(p_row.get(c_lat)) and pd.notna(p_row.get(c_lon)) and str(p_row[c_lat]).strip():
+                                    try:
+                                        p_c = (float(str(p_row[c_lat]).replace(',','.')), float(str(p_row[c_lon]).replace(',','.')))
+                                        premium_coords_cache.append(p_c)
+                                    except: pass
+                                else:
+                                    # Se non ci sono nel foglio, le cerca su internet (lentamente)
+                                    p_res = get_geo_data([f"{p_row[c_ind]}, {p_row[c_com]}, Italy"], fallback_city=p_row[c_com])
+                                    if p_res and p_res['coords']:
+                                        premium_coords_cache.append(p_res['coords'])
+                            
+                            st.session_state.premium_coords_cache = premium_coords_cache
+                            prog_prem.empty()
+                            st.success(f"✅ Memorizzati {len(premium_coords_cache)} clienti Premium!")
+                        else:
+                            st.success("⚡ FASE 1/2: Mappe Premium lette istantaneamente dalla memoria!")
+                        
+                        st.info("🔍 FASE 2/2: Sto scansionando i nuovi Bar dal tuo file Telemaco...")
+                        premium_coords_cache = st.session_state.premium_coords_cache
                         
                         nomi_esistenti_puliti = [pulisci_nome(n) for n in df[c_nom].astype(str).tolist()]
                         pive_esistenti = [str(p).strip() for p in df[c_piva].astype(str).tolist()] if c_piva else []
@@ -505,7 +542,7 @@ else:
                         
                         for idx, riga in df_tel.iterrows():
                             try:
-                                prog_tel.progress((idx + 1) / len(df_tel))
+                                prog_tel.progress((idx + 1) / len(df_tel), text=f"Scansione Telemaco: riga {idx + 1}/{len(df_tel)}")
                                 n_az = str(riga[col_nome_tel]).strip()
                                 n_az_pulito = pulisci_nome(n_az)
                                 
@@ -543,13 +580,12 @@ else:
                                     scartati_clienti += 1
                                     continue 
                                     
-                                # --- MOTORE TURBO IN AZIONE ---
+                                # --- FASE 2: Controllo Radar (Veloce!) ---
                                 t_res = get_geo_data([f"{ind_target}, {riga[col_com_tel]}, Italy"])
                                 t_coords = t_res['coords'] if t_res else None
                                 
                                 if t_coords:
                                     violazione = False
-                                    # Usa le posizioni Premium già salvate in memoria!
                                     for p_c in premium_coords_cache:
                                         if get_walking_distance(t_coords, p_c) < 150:
                                             violazione = True
