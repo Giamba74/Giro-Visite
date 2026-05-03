@@ -144,7 +144,7 @@ def get_walking_distance(coords1, coords2):
 
 def get_geo_data(query_list, fallback_city=""):
     geolocator = Nominatim(user_agent=f"brightstar_crm_app_v5_safe_{int(time.time())}")
-    time.sleep(1.5)
+    time.sleep(1.5) # Pausa obbligatoria per non farsi bloccare da internet
     for q in query_list:
         try:
             location = geolocator.geocode(q, timeout=10)
@@ -422,9 +422,9 @@ else:
 
         st.divider()
         
-        # --- CARICAMENTO FILE TELEMACO ---
+        # --- CARICAMENTO FILE TELEMACO (MOTORE TURBO V5.7) ---
         st.markdown("### 📂 Carica Lista Telemaco/InfoCamere")
-        st.write("Carica il file Excel delle nuove aperture. L'IA rimuoverà i già clienti e calcolerà i 150m.")
+        st.write("Carica il file Excel delle nuove aperture. L'IA rimuoverà i già clienti e calcolerà i 150m con il Motore Turbo.")
         
         file_tel = st.file_uploader("Trascina qui il file (Excel o CSV)", type=['xlsx', 'xls', 'csv'])
         
@@ -469,13 +469,23 @@ else:
                 if usa_filtro_cap: col_cap_tel = st.selectbox("Colonna CAP:", list(df_tel.columns), index=list(df_tel.columns).index('Cap') if 'Cap' in df_tel.columns else 0)
                 else: col_cap_tel = None
                 
-                if st.button("🚀 AVVIA SCANSIONE IA SULLA LISTA", type="primary", use_container_width=True):
+                if st.button("🚀 AVVIA SCANSIONE IA SULLA LISTA (MOTORE TURBO)", type="primary", use_container_width=True):
                     if not comuni_selezionati:
                         st.error("⚠️ Seleziona almeno un comune dalla lista qui sopra prima di avviare!")
                     else:
-                        st.info("Inizio scansione... (Calcolo Mappe e 150m in corso. Può richiedere qualche minuto)")
+                        st.info("⚡ FASE 1/2: Mappatura veloce dei tuoi clienti Premium...")
                         
                         df_prem = df[df[c_prem].str.upper().str.contains("SI", na=False)].copy()
+                        
+                        # --- IL MOTORE TURBO: Salva in memoria le posizioni Premium una volta sola! ---
+                        premium_coords_cache = []
+                        for _, p_row in df_prem.iterrows():
+                            p_res = get_geo_data([f"{p_row[c_ind]}, {p_row[c_com]}, Italy"], fallback_city=p_row[c_com])
+                            if p_res and p_res['coords']:
+                                premium_coords_cache.append(p_res['coords'])
+                                
+                        st.success(f"✅ Memorizzati {len(premium_coords_cache)} clienti Premium! FASE 2/2: Controllo dei nuovi Bar in corso...")
+                        
                         nomi_esistenti_puliti = [pulisci_nome(n) for n in df[c_nom].astype(str).tolist()]
                         pive_esistenti = [str(p).strip() for p in df[c_piva].astype(str).tolist()] if c_piva else []
                         
@@ -533,17 +543,15 @@ else:
                                     scartati_clienti += 1
                                     continue 
                                     
-                                # --- LA CORREZIONE CHE SALVA I 116 BAR ---
+                                # --- MOTORE TURBO IN AZIONE ---
                                 t_res = get_geo_data([f"{ind_target}, {riga[col_com_tel]}, Italy"])
                                 t_coords = t_res['coords'] if t_res else None
                                 
                                 if t_coords:
                                     violazione = False
-                                    for _, p_row in df_prem.iterrows():
-                                        p_res = get_geo_data([f"{p_row[c_ind]}, {p_row[c_com]}, Italy"], fallback_city=p_row[c_com])
-                                        p_c = p_res['coords'] if p_res else None
-                                        
-                                        if p_c and get_walking_distance(t_coords, p_c) < 150:
+                                    # Usa le posizioni Premium già salvate in memoria!
+                                    for p_c in premium_coords_cache:
+                                        if get_walking_distance(t_coords, p_c) < 150:
                                             violazione = True
                                             break
                                     
@@ -577,7 +585,7 @@ else:
                                 st.balloons()
                                 st.info("Ricarica la pagina: i bar sono stati aggiunti alla tabella in alto e salvati su Excel.")
                             except Exception as e_sheet:
-                                st.error("Trovati, ma c'è stato un problema nel salvarli su Google Sheet. Riprova.")
+                                st.error("Trovati, ma c'è stato un piccolo intoppo nel salvarli su Google Sheet. Riprova la scansione.")
                         else:
                             st.warning("Nessun target valido in questo file (Tutti fuori zona, già clienti o a meno di 150m dai tuoi Premium).")
             except Exception as e:
