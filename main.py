@@ -140,7 +140,12 @@ def get_walking_distance(coords1, coords2):
         res = requests.get(url, timeout=5).json()
         if res['code'] == 'Ok': return int(res['routes'][0]['distance'])
     except: pass
-    return int(geodesic(coords1, coords2).meters * 1.3)
+    
+    try:
+        # Questo è il punto dove il GPS andava in crash! Ora è protetto.
+        return int(geodesic(coords1, coords2).meters * 1.3)
+    except:
+        return 999999 # Se le coordinate sono assurde, dà distanza altissima invece di crashare
 
 def get_geo_data(query_list, fallback_city=""):
     geolocator = Nominatim(user_agent=f"brightstar_crm_app_v5_safe_{int(time.time())}")
@@ -190,20 +195,31 @@ def pulisci_nome(nome):
     nome = nome.replace('SAN ', 'S ').replace('SANTA ', 'S ')
     return ' '.join(nome.split())
 
-def pulisci_coordinata(coord_str):
+# --- LA NUOVA FUNZIONE "BULLDOZER" PER LE COORDINATE ---
+def pulisci_coordinata_italy(coord_str, is_lat=True):
     if pd.isna(coord_str) or str(coord_str).strip() == "": return None
-    c = str(coord_str).strip()
-    if isinstance(coord_str, (int, float)): return float(coord_str)
+    if hasattr(coord_str, 'year'): return None # Salta le finte date di Excel
     
+    c = str(coord_str).strip().replace(' ', '')
     if '.' in c and ',' in c:
-        if c.rfind(',') > c.rfind('.'):
-            c = c.replace('.', '').replace(',', '.') 
-        else:
-            c = c.replace(',', '') 
+        if c.rfind(',') > c.rfind('.'): c = c.replace('.', '').replace(',', '.') 
+        else: c = c.replace(',', '') 
     elif ',' in c:
         c = c.replace(',', '.') 
-    try: return float(c)
-    except: return None
+        
+    try: 
+        val = float(c)
+        # Se Excel ha moltiplicato il numero a dismisura (es. 43463.12)
+        while abs(val) > 90:
+            val = val / 10.0
+            
+        # Controlliamo che il numero sia almeno approssimativamente in Italia!
+        if is_lat and (val < 35 or val > 48): return None
+        if not is_lat and (val < 6 or val > 20): return None
+        
+        return val
+    except: 
+        return None
 
 # --- APP START ---
 try: ws, ws_ai, ws_mem, ws_pot = connect_db()
@@ -295,8 +311,8 @@ else:
                 for i, p in enumerate(raw):
                     prog_bar.progress((i + 1) / len(raw), text=f"🔍 Mappatura: {p[c_nom]}")
                     
-                    lat_val = pulisci_coordinata(p.get(c_lat)) if c_lat else None
-                    lon_val = pulisci_coordinata(p.get(c_lon)) if c_lon else None
+                    lat_val = pulisci_coordinata_italy(p.get(c_lat), True) if c_lat else None
+                    lon_val = pulisci_coordinata_italy(p.get(c_lon), False) if c_lon else None
                     
                     if lat_val and lon_val:
                         p['g_data'] = {'coords': (lat_val, lon_val), 'found': True, 'tel': ''}
@@ -431,8 +447,8 @@ else:
                     df_prem = df[df[c_prem].str.upper().str.contains("SI", na=False)].copy()
                     violazione = False; vicini = []
                     for _, row in df_prem.iterrows():
-                        lat_val = pulisci_coordinata(row.get(c_lat)) if c_lat else None
-                        lon_val = pulisci_coordinata(row.get(c_lon)) if c_lon else None
+                        lat_val = pulisci_coordinata_italy(row.get(c_lat), True) if c_lat else None
+                        lon_val = pulisci_coordinata_italy(row.get(c_lon), False) if c_lon else None
                         
                         if lat_val and lon_val:
                             p_c = (lat_val, lon_val)
@@ -454,9 +470,9 @@ else:
 
         st.divider()
         
-        # --- CARICAMENTO FILE TELEMACO (MOTORE ENTERPRISE V5.10) ---
+        # --- CARICAMENTO FILE TELEMACO (MOTORE ENTERPRISE V5.11 Bulldozer) ---
         st.markdown("### 📂 Carica Lista Telemaco/InfoCamere")
-        st.write("Carica il file Excel delle nuove aperture. L'IA rimuoverà i già clienti e calcolerà i 150m.")
+        st.write("Carica il file Excel. L'IA rimuoverà i già clienti e calcolerà i 150m. (Versione Bulldozer anti-crash Excel).")
         
         file_tel = st.file_uploader("Trascina qui il file (Excel o CSV)", type=['xlsx', 'xls', 'csv'])
         
@@ -487,7 +503,6 @@ else:
                 idx_piva_def = opzioni_piva.index('Partita IVA') if 'Partita IVA' in opzioni_piva else (opzioni_piva.index('P.IVA') if 'P.IVA' in opzioni_piva else 0)
                 with c_t3: col_piva_tel = st.selectbox("Colonna PARTITA IVA:", opzioni_piva, index=idx_piva_def)
                 
-                # ORA IL CAP È SEMPRE PRESENTE NELLA CONFIGURAZIONE!
                 idx_cap = list(df_tel.columns).index('Cap') if 'Cap' in df_tel.columns else 0
                 with c_t4: col_cap_tel = st.selectbox("Colonna CAP:", df_tel.columns, index=idx_cap)
                 
@@ -501,8 +516,6 @@ else:
                 comuni_selezionati = st.multiselect("L'IA analizzerà SOLO i comuni che scegli qui sotto:", comuni_nel_file, default=default_sel)
                 
                 st.markdown("<br>", unsafe_allow_html=True)
-                
-                # IL CHECKBOX ORA DECIDE SOLO SE FILTRARE O NO I RISULTATI
                 usa_filtro_cap = st.checkbox("📮 SCARTA i bar che sono fuori dai miei CAP (Filtro Precisione)", value=False)
                 
                 if st.button("🚀 AVVIA SCANSIONE IA SULLA LISTA", type="primary", use_container_width=True):
@@ -512,7 +525,7 @@ else:
                         df_prem = df[df[c_prem].str.upper().str.contains("SI", na=False)].copy()
                         
                         if 'premium_coords_cache' not in st.session_state or len(st.session_state.premium_coords_cache) != len(df_prem):
-                            st.info("⚡ FASE 1/2: Lettura istantanea dei tuoi clienti Premium...")
+                            st.info("⚡ FASE 1/2: Lettura istantanea dei tuoi clienti Premium (Anti-crash attivato)...")
                             prog_prem = st.progress(0)
                             premium_coords_cache = []
                             total_prem = len(df_prem)
@@ -520,8 +533,8 @@ else:
                             for i, (_, p_row) in enumerate(df_prem.iterrows()):
                                 prog_prem.progress((i + 1) / total_prem, text=f"📍 Mappatura Premium {i+1} di {total_prem}...")
                                 
-                                lat_val = pulisci_coordinata(p_row.get(c_lat)) if c_lat else None
-                                lon_val = pulisci_coordinata(p_row.get(c_lon)) if c_lon else None
+                                lat_val = pulisci_coordinata_italy(p_row.get(c_lat), True) if c_lat else None
+                                lon_val = pulisci_coordinata_italy(p_row.get(c_lon), False) if c_lon else None
                                 
                                 if lat_val and lon_val:
                                     premium_coords_cache.append((lat_val, lon_val))
@@ -563,8 +576,6 @@ else:
                                 n_az_pulito = pulisci_nome(n_az)
                                 
                                 comune_target = str(riga[col_com_tel]).upper().strip()
-                                
-                                # IL CAP ORA VIENE SEMPRE LETTO (anche se il filtro è spento)
                                 cap_target = str(riga[col_cap_tel]).replace('.0', '').strip().zfill(5) if col_cap_tel else ""
                                 
                                 if 'Toponimo' in df_tel.columns and 'Via' in df_tel.columns and 'N civico' in df_tel.columns:
@@ -578,7 +589,6 @@ else:
                                     scartati_zona += 1
                                     continue
                                     
-                                # IL FILTRO INTERVIENE SOLO SE LA SPUNTA È ACCESA
                                 if usa_filtro_cap and cap_target:
                                     comune_tel_pulito = pulisci_nome(comune_target)
                                     caps_ammessi = mappa_zone.get(comune_tel_pulito, [])
@@ -599,14 +609,16 @@ else:
                                     scartati_clienti += 1
                                     continue 
                                     
-                                # --- FASE 2: Controllo Radar ---
+                                # --- FASE 2: Controllo Radar proteso da crash ---
                                 t_res = get_geo_data([f"{ind_target}, {riga[col_com_tel]}, Italy"])
                                 t_coords = t_res['coords'] if t_res else None
                                 
                                 if t_coords:
                                     violazione = False
                                     for p_c in premium_coords_cache:
-                                        if get_walking_distance(t_coords, p_c) < 150:
+                                        # Ora il GPS non può più crashare la riga intera!
+                                        dist = get_walking_distance(t_coords, p_c)
+                                        if dist < 150:
                                             violazione = True
                                             break
                                     
@@ -618,6 +630,9 @@ else:
                                     scartati_gps += 1
                                     risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, ind_target, str(riga[col_com_tel]), "⚠️ Mappa Fallita (Verifica a mano)", f"CAP: {cap_target}"])
                             except Exception as inner_e:
+                                # Se qualcosa va male in modo inaspettato, almeno contiamolo nelle mappe fallite per non perdere il numero!
+                                scartati_gps += 1
+                                risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, ind_target, str(riga[col_com_tel]), f"⚠️ Errore Calcolo: Verifica a mano", f"CAP: {cap_target}"])
                                 continue
                                 
                         prog_tel.empty()
@@ -627,18 +642,19 @@ else:
                         c_rep1.metric("🌍 Comuni/CAP Ignorati", scartati_zona)
                         c_rep2.metric("👥 Già Clienti", scartati_clienti)
                         c_rep3.metric("🔴 < 150m", scartati_radar)
-                        c_rep4.metric("⚠️ Mappe Fallite", scartati_gps)
+                        c_rep4.metric("⚠️ Mappe Fallite / Da Verificare", scartati_gps)
                         
                         if debug_cap_scartati:
                             with st.expander("🔍 DEBUG: Vedi i CAP scartati su città valide"):
                                 st.write(list(set(debug_cap_scartati)))
                         
                         if risultati_positivi:
-                            st.success(f"🎯 BERSAGLIO! Trovati {len(risultati_positivi)} target potenziali liberi!")
+                            tot_ok = len([r for r in risultati_positivi if "✅ OK" in r[5]])
+                            st.success(f"🎯 BERSAGLIO! Trovati {tot_ok} target potenziali liberi! (più {scartati_gps} da verificare a mano)")
                             try:
                                 for r in risultati_positivi: ws_pot.append_row(r)
                                 st.balloons()
-                                st.info("Ricarica la pagina: i bar sono stati aggiunti alla tabella in alto e salvati su Excel con il loro CAP.")
+                                st.info("Ricarica la pagina: i bar sono stati aggiunti alla tabella in alto e salvati su Excel.")
                             except Exception as e_sheet:
                                 st.error("Trovati, ma c'è stato un piccolo intoppo nel salvarli su Google Sheet. Riprova la scansione.")
                         else:
