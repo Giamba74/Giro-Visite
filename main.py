@@ -142,7 +142,7 @@ def get_walking_distance(coords1, coords2):
     return int(geodesic(coords1, coords2).meters * 1.3)
 
 def get_geo_data(query_list, fallback_city=""):
-    geolocator = Nominatim(user_agent="brightstar_crm_app_v5_2")
+    geolocator = Nominatim(user_agent="brightstar_crm_app_v5_def")
     time.sleep(1.2)
     for q in query_list:
         try:
@@ -198,7 +198,7 @@ else:
         c_cap = next((c for c in df.columns if "CAP" in c), "CAP")
         c_vis = next(c for c in df.columns if "VISITATO" in c)
     except StopIteration:
-        st.error("❌ ERRORE: Colonne fondamentali mancanti nel Foglio 1.")
+        st.error("❌ ERRORE: Colonne fondamentali mancanti nel Foglio 1 (Assicurati di avere CLIENTE, INDIRIZZO, COMUNE, CAP, VISITATO).")
         st.stop()
     
     c_tel = next((c for c in df.columns if "TELEFONO" in c or "CELL" in c or "TEL" in c), "TELEFONO")
@@ -208,7 +208,10 @@ else:
     c_note_sto = next((c for c in df.columns if "STORICO" in c or "NOTE" in c), None)
     c_prem = next((c for c in df.columns if "PREMIUM" in c), None)
     c_piva = next((c for c in df.columns if "P.IVA" in c or "PIVA" in c), None)
-    if "CAP" in df.columns: df[c_cap] = df[c_cap].astype(str).str.replace('.0','').str.zfill(5)
+    
+    # Pulizia aggressiva dei CAP nel database principale
+    if "CAP" in df.columns: 
+        df[c_cap] = df[c_cap].astype(str).str.replace('.0','').str.strip().str.zfill(5)
 
     if 'master_route' not in st.session_state and ws_mem:
         rotta_salvata = carica_giro_da_foglio(ws_mem)
@@ -404,11 +407,11 @@ else:
                         if st.button("💾 SALVA IN POTENZIALI", use_container_width=True):
                             ws_pot.append_row([datetime.now().strftime("%d/%m/%Y"), n_piva, n_nome, n_ind, n_com, "OK (Singolo)", ""])
                             st.success("Salvato!")
-                else: st.error("Indirizzo non trovato.")
+                else: st.error("Indirizzo non trovato sulla mappa.")
 
         st.divider()
         
-        # --- CARICAMENTO FILE TELEMACO (CON FILTRO DOPPIO COMUNE/CAP) ---
+        # --- CARICAMENTO FILE TELEMACO (AGGIORNATO E BLINDATO) ---
         st.markdown("### 📂 Carica Lista Telemaco/InfoCamere")
         st.write("Carica il file Excel delle nuove aperture. L'IA filtrerà le tue zone esatte (Comuni e CAP), rimuoverà i già clienti e calcolerà i 150m.")
         
@@ -431,44 +434,45 @@ else:
                 
                 st.markdown("<br>", unsafe_allow_html=True)
                 usa_filtro_zona = st.checkbox("🌍 Applica Filtro Comune (Scarta città fuori zona)", value=True)
-                usa_filtro_cap = st.checkbox("📮 Applica Filtro CAP (Scarta i CAP di Firenze che non ho in portafoglio)", value=True)
+                usa_filtro_cap = st.checkbox("📮 Applica Filtro CAP (Scarta i CAP che non ho in portafoglio)", value=True)
                 
                 if st.button("🚀 AVVIA SCANSIONE IA SULLA LISTA", type="primary", use_container_width=True):
                     st.info("Inizio scansione intelligente... (potrebbe richiedere qualche minuto)")
                     
                     df_prem = df[df[c_prem].str.upper().str.contains("SI", na=False)].copy()
-                    pive_esistenti = df[c_piva].astype(str).tolist() if c_piva else []
-                    nomi_esistenti = df[c_nom].astype(str).str.upper().tolist()
+                    pive_esistenti = [str(p).strip() for p in df[c_piva].astype(str).tolist()] if c_piva else []
+                    nomi_esistenti = df[c_nom].astype(str).str.upper().str.strip().tolist()
                     
-                    # --- CREAZIONE MAPPA ZONE (COMUNE -> LISTA CAP) ---
+                    # --- CREAZIONE MAPPA ZONE BLINDATA (Pulizia Spazi e Decimali) ---
                     mappa_zone = {}
                     if usa_filtro_zona:
                         for comune, cap_list in df.groupby(c_com)[c_cap].unique().items():
-                            mappa_zone[str(comune).upper().strip()] = [str(c).replace('.0','').zfill(5) for c in cap_list if pd.notna(c) and str(c).strip() != ""]
+                            mappa_zone[str(comune).upper().strip()] = [str(c).replace('.0','').strip().zfill(5) for c in cap_list if pd.notna(c) and str(c).strip() != ""]
                     
                     risultati_positivi = []
                     scartati_zona = 0
                     scartati_clienti = 0
                     scartati_radar = 0
+                    scartati_gps = 0 # <-- CONTATORE SALVATAGGIO EMERGENZA
                     
                     prog_tel = st.progress(0)
                     
                     for idx, riga in df_tel.iterrows():
                         prog_tel.progress((idx + 1) / len(df_tel))
-                        n_az = str(riga[col_nome_tel])
+                        n_az = str(riga[col_nome_tel]).strip()
                         comune_target = str(riga[col_com_tel]).upper().strip()
-                        cap_target = str(riga[col_cap_tel]).replace('.0', '').zfill(5) if col_cap_tel != "Nessuna" else ""
+                        cap_target = str(riga[col_cap_tel]).replace('.0', '').strip().zfill(5) if col_cap_tel != "Nessuna" else ""
                         
                         # FILTRO 1: ZONE E CAP
                         if usa_filtro_zona:
                             if comune_target not in mappa_zone:
                                 scartati_zona += 1
-                                continue # Città completamente fuori zona
+                                continue
                             
                             if usa_filtro_cap and cap_target and len(mappa_zone.get(comune_target, [])) > 0:
                                 if cap_target not in mappa_zone[comune_target]:
                                     scartati_zona += 1
-                                    continue # Quartiere/CAP fuori dalla mia competenza
+                                    continue
                             
                         # FILTRO 2: GIA' CLIENTI
                         se_piva = str(riga[col_piva_tel]).strip() if col_piva_tel != "Nessuna" else ""
@@ -476,7 +480,7 @@ else:
                             scartati_clienti += 1
                             continue 
                             
-                        # FILTRO 3: RADAR 150m
+                        # FILTRO 3: RADAR 150m (Ora protetto da crash)
                         t_coords = get_geo_data([f"{riga[col_ind_tel]}, {riga[col_com_tel]}, Italy"])[0]
                         if t_coords:
                             violazione = False
@@ -486,24 +490,29 @@ else:
                                     violazione = True; break
                             
                             if not violazione:
-                                risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, str(riga[col_ind_tel]), str(riga[col_com_tel]), "OK (Da Telemaco)", f"CAP: {cap_target}"])
+                                risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, str(riga[col_ind_tel]), str(riga[col_com_tel]), "✅ OK (Da Telemaco)", f"CAP: {cap_target}"])
                             else:
                                 scartati_radar += 1
+                        else:
+                            # 🚨 SE LA MAPPA FALLISCE, IL BAR VIENE SALVATO LO STESSO!
+                            scartati_gps += 1
+                            risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, str(riga[col_ind_tel]), str(riga[col_com_tel]), "⚠️ ERRORE GPS (Verifica a mano)", f"CAP: {cap_target}"])
                     
                     prog_tel.empty()
                     
                     st.markdown("### 📊 Report Scansione Telemaco")
-                    col_rep1, col_rep2, col_rep3 = st.columns(3)
-                    col_rep1.metric("🌍 Fuori Zona o CAP Errato", scartati_zona)
-                    col_rep2.metric("👥 Già Clienti (Scartati)", scartati_clienti)
-                    col_rep3.metric("🔴 Radar < 150m (Scartati)", scartati_radar)
+                    c_rep1, c_rep2, c_rep3, c_rep4 = st.columns(4)
+                    c_rep1.metric("🌍 Fuori Zona/CAP", scartati_zona)
+                    c_rep2.metric("👥 Già Clienti", scartati_clienti)
+                    c_rep3.metric("🔴 < 150m", scartati_radar)
+                    c_rep4.metric("⚠️ Mappa Fallita", scartati_gps)
                     
                     if risultati_positivi:
-                        st.success(f"🎯 BERSAGLIO! Trovati {len(risultati_positivi)} target perfetti.")
+                        st.success(f"🎯 BERSAGLIO! Trovati {len(risultati_positivi)} target potenziali (inclusi {scartati_gps} con indirizzo non mappato).")
                         for r in risultati_positivi: ws_pot.append_row(r)
                         st.balloons()
-                        st.info("I contatti sono stati salvati nel Foglio POTENZIALI.")
+                        st.info("I contatti sono stati salvati nel Foglio POTENZIALI. Ricarica la pagina per vederli nella tabella in alto.")
                     else:
-                        st.warning("Nessun nuovo target rilevato dopo i filtri.")
+                        st.warning("Nessun nuovo target rilevato dopo l'applicazione di tutti i filtri. Riprova disattivando il filtro CAP.")
             except Exception as e:
                 st.error(f"Errore nella lettura del file: {e}")
