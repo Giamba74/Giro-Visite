@@ -190,7 +190,6 @@ def pulisci_nome(nome):
     nome = nome.replace('SAN ', 'S ').replace('SANTA ', 'S ')
     return ' '.join(nome.split())
 
-# --- FUNZIONE MAGICA PER LE COORDINATE ITALIANE ---
 def pulisci_coordinata(coord_str):
     if pd.isna(coord_str) or str(coord_str).strip() == "": return None
     c = str(coord_str).strip()
@@ -198,11 +197,11 @@ def pulisci_coordinata(coord_str):
     
     if '.' in c and ',' in c:
         if c.rfind(',') > c.rfind('.'):
-            c = c.replace('.', '').replace(',', '.') # Formato Ita: 43.463,12 -> 43463.12
+            c = c.replace('.', '').replace(',', '.') 
         else:
-            c = c.replace(',', '') # Formato USA: 43,463.12 -> 43463.12
+            c = c.replace(',', '') 
     elif ',' in c:
-        c = c.replace(',', '.') # Converte virgola italiana in punto
+        c = c.replace(',', '.') 
     try: return float(c)
     except: return None
 
@@ -296,7 +295,6 @@ else:
                 for i, p in enumerate(raw):
                     prog_bar.progress((i + 1) / len(raw), text=f"🔍 Mappatura: {p[c_nom]}")
                     
-                    # Usa la nuova funzione pulisci_coordinata
                     lat_val = pulisci_coordinata(p.get(c_lat)) if c_lat else None
                     lon_val = pulisci_coordinata(p.get(c_lon)) if c_lon else None
                     
@@ -456,9 +454,9 @@ else:
 
         st.divider()
         
-        # --- CARICAMENTO FILE TELEMACO (MOTORE ENTERPRISE V5.9) ---
+        # --- CARICAMENTO FILE TELEMACO (MOTORE ENTERPRISE V5.10) ---
         st.markdown("### 📂 Carica Lista Telemaco/InfoCamere")
-        st.write("Carica il file Excel delle nuove aperture. L'IA rimuoverà i già clienti e calcolerà i 150m con il Motore Enterprise V5.9 (Supporto Numeri Italiani).")
+        st.write("Carica il file Excel delle nuove aperture. L'IA rimuoverà i già clienti e calcolerà i 150m.")
         
         file_tel = st.file_uploader("Trascina qui il file (Excel o CSV)", type=['xlsx', 'xls', 'csv'])
         
@@ -477,7 +475,7 @@ else:
                 st.dataframe(df_tel.head(3), use_container_width=True)
                 
                 st.markdown("#### ⚙️ Associa le Colonne")
-                c_t1, c_t2, c_t3 = st.columns(3)
+                c_t1, c_t2, c_t3, c_t4 = st.columns(4)
                 
                 idx_nome = list(df_tel.columns).index('Denominazione') if 'Denominazione' in df_tel.columns else 0
                 with c_t1: col_nome_tel = st.selectbox("Colonna NOME AZIENDA:", df_tel.columns, index=idx_nome)
@@ -489,6 +487,10 @@ else:
                 idx_piva_def = opzioni_piva.index('Partita IVA') if 'Partita IVA' in opzioni_piva else (opzioni_piva.index('P.IVA') if 'P.IVA' in opzioni_piva else 0)
                 with c_t3: col_piva_tel = st.selectbox("Colonna PARTITA IVA:", opzioni_piva, index=idx_piva_def)
                 
+                # ORA IL CAP È SEMPRE PRESENTE NELLA CONFIGURAZIONE!
+                idx_cap = list(df_tel.columns).index('Cap') if 'Cap' in df_tel.columns else 0
+                with c_t4: col_cap_tel = st.selectbox("Colonna CAP:", df_tel.columns, index=idx_cap)
+                
                 st.markdown("<hr style='border:1px solid rgba(255,255,255,0.05);'>", unsafe_allow_html=True)
                 st.markdown("#### 🎯 Seleziona le tue zone:")
                 
@@ -499,11 +501,11 @@ else:
                 comuni_selezionati = st.multiselect("L'IA analizzerà SOLO i comuni che scegli qui sotto:", comuni_nel_file, default=default_sel)
                 
                 st.markdown("<br>", unsafe_allow_html=True)
-                usa_filtro_cap = st.checkbox("📮 Usa il Filtro CAP", value=False)
-                if usa_filtro_cap: col_cap_tel = st.selectbox("Colonna CAP:", list(df_tel.columns), index=list(df_tel.columns).index('Cap') if 'Cap' in df_tel.columns else 0)
-                else: col_cap_tel = None
                 
-                if st.button("🚀 AVVIA SCANSIONE IA SULLA LISTA (MOTORE ENTERPRISE)", type="primary", use_container_width=True):
+                # IL CHECKBOX ORA DECIDE SOLO SE FILTRARE O NO I RISULTATI
+                usa_filtro_cap = st.checkbox("📮 SCARTA i bar che sono fuori dai miei CAP (Filtro Precisione)", value=False)
+                
+                if st.button("🚀 AVVIA SCANSIONE IA SULLA LISTA", type="primary", use_container_width=True):
                     if not comuni_selezionati:
                         st.error("⚠️ Seleziona almeno un comune dalla lista qui sopra prima di avviare!")
                     else:
@@ -561,6 +563,8 @@ else:
                                 n_az_pulito = pulisci_nome(n_az)
                                 
                                 comune_target = str(riga[col_com_tel]).upper().strip()
+                                
+                                # IL CAP ORA VIENE SEMPRE LETTO (anche se il filtro è spento)
                                 cap_target = str(riga[col_cap_tel]).replace('.0', '').strip().zfill(5) if col_cap_tel else ""
                                 
                                 if 'Toponimo' in df_tel.columns and 'Via' in df_tel.columns and 'N civico' in df_tel.columns:
@@ -574,6 +578,7 @@ else:
                                     scartati_zona += 1
                                     continue
                                     
+                                # IL FILTRO INTERVIENE SOLO SE LA SPUNTA È ACCESA
                                 if usa_filtro_cap and cap_target:
                                     comune_tel_pulito = pulisci_nome(comune_target)
                                     caps_ammessi = mappa_zone.get(comune_tel_pulito, [])
@@ -633,7 +638,7 @@ else:
                             try:
                                 for r in risultati_positivi: ws_pot.append_row(r)
                                 st.balloons()
-                                st.info("Ricarica la pagina: i bar sono stati aggiunti alla tabella in alto e salvati su Excel.")
+                                st.info("Ricarica la pagina: i bar sono stati aggiunti alla tabella in alto e salvati su Excel con il loro CAP.")
                             except Exception as e_sheet:
                                 st.error("Trovati, ma c'è stato un piccolo intoppo nel salvarli su Google Sheet. Riprova la scansione.")
                         else:
