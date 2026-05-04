@@ -88,7 +88,6 @@ def pulisci_coordinata_italy(coord_str, is_lat=True):
         return None
     except: return None
 
-# 🚶 MOTORE DI ROTTA PEDONALE (OSRM)
 def calcola_distanza_pedonale(coord_partenza, coord_arrivo):
     try:
         url = f"http://router.project-osrm.org/route/v1/foot/{coord_partenza[1]},{coord_partenza[0]};{coord_arrivo[1]},{coord_arrivo[0]}?overview=false"
@@ -181,7 +180,7 @@ if ws:
     if 'db_tasks' not in st.session_state and ws_mem: 
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
-    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.40</div>", unsafe_allow_html=True)
+    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.42</div>", unsafe_allow_html=True)
     tab1, tab2 = st.tabs(["🚗 GIRO VISITE & NUOVI", "🛰️ RADAR 150m & TELEMACO"])
 
     # ==========================================
@@ -224,44 +223,46 @@ if ws:
                 
                 for p in pool: p['is_potenziale'] = False
                 
-                # 🎯 L'ESTRATTORE DEFINITIVO (Matrice Grezza Google Sheets)
+                # 🎯 ESTRATTORE INDISTRUTTIBILE (Basato sulla Posizione della Spunta)
                 if num_potenziali > 0 and ws_pot:
                     try:
                         pot_data = ws_pot.get_all_values()
                         if len(pot_data) > 1:
-                            headers = [str(h).strip().upper() for h in pot_data[0]]
                             pot_trovati = []
                             for r_idx, row in enumerate(pot_data[1:]):
-                                r = {headers[i]: row[i] if i < len(row) else "" for i in range(len(headers))}
+                                # Trova l'indice della colonna dove c'è "✅ DISPONIBILE"
+                                idx_stato = next((i for i, cell in enumerate(row) if "✅" in str(cell).upper() or "DISPONIBILE" in str(cell).upper()), -1)
                                 
-                                stato = str(r.get("STATO", "")).strip().upper()
-                                data_visita = str(r.get("DATA_VISITA", "")).strip() 
-                                
-                                if not data_visita and ("✅" in stato or "OK" in stato or "DISPONIBILE" in stato):
-                                    addr_pot = str(r.get("INDIRIZZO", "")).strip()
-                                    comune_pot = str(r.get("COMUNE", "")).strip().upper()
+                                if idx_stato >= 3: # Se ha trovato lo stato, sa che 3 posizioni prima c'è il NOME
+                                    data_visita = str(row[idx_stato + 1]).strip() if len(row) > idx_stato + 1 else ""
                                     
-                                    passa_filtro_cap = True
-                                    if sel_cap_clean:
-                                        caps_in_addr = re.findall(r'\b\d{5}\b', addr_pot)
-                                        if caps_in_addr: 
-                                            if not any(cap in caps_in_addr for cap in sel_cap_clean): passa_filtro_cap = False
-                                    
-                                    passa_filtro_comune = True
-                                    if sel_zona_clean:
-                                        # Controlla se la parola cercata è dentro il comune (es. "AREZZO" dentro "AREZZO (AR)")
-                                        if not any(z in comune_pot for z in sel_zona_clean): passa_filtro_comune = False
-                                            
-                                    if passa_filtro_cap and passa_filtro_comune:
-                                        p_new = {
-                                            c_nom: str(r.get("CLIENTE", "Sconosciuto")).strip(),
-                                            c_ind: addr_pot,
-                                            c_com: comune_pot,
-                                            "is_potenziale": True,
-                                            "PIVA": str(r.get("PIVA", "")).replace('nan','').strip(),
-                                            "row_idx": r_idx + 2 
-                                        }
-                                        pot_trovati.append(p_new)
+                                    if not data_visita:
+                                        comune_pot = str(row[idx_stato - 1]).strip().upper()
+                                        addr_pot = str(row[idx_stato - 2]).strip()
+                                        nome_pot = str(row[idx_stato - 3]).strip()
+                                        piva_pot = str(row[idx_stato + 4]).strip() if len(row) > idx_stato + 4 else ""
+                                        
+                                        passa_filtro_cap = True
+                                        if sel_cap_clean:
+                                            caps_in_addr = re.findall(r'\b\d{5}\b', addr_pot)
+                                            if caps_in_addr: 
+                                                if not any(cap in caps_in_addr for cap in sel_cap_clean): passa_filtro_cap = False
+                                        
+                                        passa_filtro_comune = True
+                                        if sel_zona_clean:
+                                            if not any(z in comune_pot for z in sel_zona_clean): passa_filtro_comune = False
+                                                
+                                        if passa_filtro_cap and passa_filtro_comune:
+                                            p_new = {
+                                                c_nom: nome_pot,
+                                                c_ind: addr_pot,
+                                                c_com: comune_pot,
+                                                "is_potenziale": True,
+                                                "PIVA": piva_pot,
+                                                "row_idx": r_idx + 2,
+                                                "idx_stato": idx_stato # Memorizzo per quando salverà
+                                            }
+                                            pot_trovati.append(p_new)
                             
                             if pot_trovati:
                                 pool.extend(pot_trovati[:num_potenziali])
@@ -400,14 +401,20 @@ if ws:
                             else:
                                 if ws_pot:
                                     riga = p['row_idx']
+                                    idx_stato = p.get('idx_stato', 4) # Fallback alla colonna 4 se manca
+                                    
                                     data_visita = datetime.now(TZ_ITALY).strftime("%d/%m/%Y")
                                     scoring = st.session_state.get(f"score_{i}", "")
                                     piva = st.session_state.get(f"piva_{i}", "")
                                     
-                                    ws_pot.update_cell(riga, 6, data_visita)
-                                    ws_pot.update_cell(riga, 7, esito_selezionato)
-                                    ws_pot.update_cell(riga, 8, scoring)
-                                    ws_pot.update_cell(riga, 9, piva)
+                                    try:
+                                        # Scrive le celle in base alla posizione esatta dello STATO
+                                        ws_pot.update_cell(riga, idx_stato + 2, data_visita)
+                                        ws_pot.update_cell(riga, idx_stato + 3, esito_selezionato)
+                                        ws_pot.update_cell(riga, idx_stato + 4, scoring)
+                                        ws_pot.update_cell(riga, idx_stato + 5, piva)
+                                    except: pass
+                                    
                                     st.toast(f"Dati salvati per {p[c_nom]}!", icon="💾")
                                 
                                 st.session_state.master_route.pop(i)
@@ -423,24 +430,23 @@ if ws:
                 nomi_nel_giro = [p[c_nom] for p in st.session_state.master_route]
                 clienti_cg_completati = [n for n, tasks in st.session_state.db_tasks.items() if any("CG" in str(t).upper() for t in tasks)]
                 
-                # Lista 1: Clienti Normali
                 mask_aggiunta = ~df[c_nom].isin(nomi_nel_giro) & ~df[c_nom].isin(clienti_cg_completati)
                 clienti_disponibili = sorted(df[mask_aggiunta][c_nom].dropna().unique().tolist())
                 
-                # Lista 2: Potenziali Estratti dalla Matrice
                 potenziali_disponibili = []
                 if ws_pot:
                     try:
                         pot_data = ws_pot.get_all_values()
                         if len(pot_data) > 1:
-                            headers = [str(h).strip().upper() for h in pot_data[0]]
                             for r_idx, row in enumerate(pot_data[1:]):
-                                r = {headers[i]: row[i] if i < len(row) else "" for i in range(len(headers))}
-                                if not str(r.get("DATA_VISITA", "")).strip() and ("✅" in str(r.get("STATO", "")).upper() or "DISPONIBILE" in str(r.get("STATO", "")).upper()):
-                                    nome_pot = str(r.get("CLIENTE", "Sconosciuto")).strip()
-                                    if nome_pot and nome_pot not in nomi_nel_giro:
-                                        comune_pot = str(r.get("COMUNE", "")).strip().title()
-                                        potenziali_disponibili.append(f"🆕 {nome_pot} ({comune_pot}) [POTENZIALE]")
+                                idx_stato = next((i for i, cell in enumerate(row) if "✅" in str(cell).upper() or "DISPONIBILE" in str(cell).upper()), -1)
+                                if idx_stato >= 3:
+                                    data_visita = str(row[idx_stato + 1]).strip() if len(row) > idx_stato + 1 else ""
+                                    if not data_visita:
+                                        nome_pot = str(row[idx_stato - 3]).strip()
+                                        if nome_pot and nome_pot not in nomi_nel_giro:
+                                            comune_pot = str(row[idx_stato - 1]).strip().title()
+                                            potenziali_disponibili.append(f"🆕 {nome_pot} ({comune_pot}) [POTENZIALE]")
                     except: pass
                 
                 tutti_disponibili = [""] + potenziali_disponibili + clienti_disponibili
@@ -454,19 +460,21 @@ if ws:
                         if is_pot_selezionato:
                             clean_name = cliente_da_aggiungere.split(" (")[0].replace("🆕 ", "").strip()
                             pot_data = ws_pot.get_all_values()
-                            headers = [str(h).strip().upper() for h in pot_data[0]]
                             for r_idx, row in enumerate(pot_data[1:]):
-                                r = {headers[i]: row[i] if i < len(row) else "" for i in range(len(headers))}
-                                if str(r.get("CLIENTE", "")).strip() == clean_name:
-                                    p_new = {
-                                        c_nom: clean_name,
-                                        c_ind: str(r.get("INDIRIZZO", "")).strip(),
-                                        c_com: str(r.get("COMUNE", "")).strip().upper(),
-                                        "is_potenziale": True,
-                                        "PIVA": str(r.get("PIVA", "")).replace('nan','').strip(),
-                                        "row_idx": r_idx + 2 
-                                    }
-                                    break
+                                idx_stato = next((i for i, cell in enumerate(row) if "✅" in str(cell).upper() or "DISPONIBILE" in str(cell).upper()), -1)
+                                if idx_stato >= 3:
+                                    nome_pot = str(row[idx_stato - 3]).strip()
+                                    if nome_pot == clean_name:
+                                        p_new = {
+                                            c_nom: clean_name,
+                                            c_ind: str(row[idx_stato - 2]).strip(),
+                                            c_com: str(row[idx_stato - 1]).strip().upper(),
+                                            "is_potenziale": True,
+                                            "PIVA": str(row[idx_stato + 4]).strip() if len(row) > idx_stato + 4 else "",
+                                            "row_idx": r_idx + 2,
+                                            "idx_stato": idx_stato
+                                        }
+                                        break
                         else:
                             riga_cliente = df[df[c_nom] == cliente_da_aggiungere].iloc[0]
                             p_new = riga_cliente.to_dict()
@@ -594,11 +602,10 @@ if ws:
                         if not ws_pot:
                             st.error("🚨 ERRORE: Non trovo il foglio 'POTENZIALI'.")
                         else:
-                            with st.spinner("Scrittura sul database in corso... non chiudere..."):
+                            with st.spinner("Guarigione del Foglio e Scrittura sul database in corso..."):
                                 try:
-                                    val_a1 = ws_pot.acell("A1").value
-                                    if not val_a1:
-                                        ws_pot.insert_row(["DATA_INS", "CLIENTE", "INDIRIZZO", "COMUNE", "STATO", "DATA_VISITA", "ESITO", "SCORING", "PIVA"], index=1)
+                                    # GUARIGIONE DELLE INTESTAZIONI
+                                    ws_pot.update("A1:I1", [["DATA_INS", "CLIENTE", "INDIRIZZO", "COMUNE", "STATO", "DATA_VISITA", "ESITO", "SCORING", "PIVA"]])
                                     
                                     nuove_righe = []
                                     oggi_str = datetime.now(TZ_ITALY).strftime("%d/%m/%Y")
@@ -607,7 +614,7 @@ if ws:
                                     
                                     if nuove_righe:
                                         ws_pot.append_rows(nuove_righe, value_input_option='USER_ENTERED')
-                                        st.success("✅ Salvataggio completato!")
+                                        st.success("✅ Salvataggio completato! Intestazioni rigenerate con successo.")
                                         st.session_state.radar_risultati = None 
                                         st.session_state.radar_scarti = None
                                         time.sleep(2)
