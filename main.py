@@ -60,6 +60,19 @@ def carica_storico_attivita(sh_memoria):
         return {row[0]: json.loads(row[1]) for row in raw[1:] if len(row) >= 2} if raw else {}
     except: return {}
 
+def aggiorna_attivita_cliente(sh_memoria, cliente, tasks_list):
+    try:
+        raw = sh_memoria.get("D:E")
+        records = raw if raw else []
+        row_idx = next((i + 1 for i, row in enumerate(records) if len(row) > 0 and row[0] == cliente), -1)
+        if row_idx != -1:
+            sh_memoria.update_cell(row_idx, 5, json.dumps(tasks_list))
+        else:
+            next_row = len(sh_memoria.col_values(4)) + 1
+            sh_memoria.update_cell(next_row, 4, cliente)
+            sh_memoria.update_cell(next_row, 5, json.dumps(tasks_list))
+    except: pass
+
 def pulisci_coordinata_italy(coord_str, is_lat=True):
     if pd.isna(coord_str) or str(coord_str).strip() == "": return None
     c = str(coord_str).strip().replace(' ', '').replace(',', '.')
@@ -114,6 +127,7 @@ if ws:
     data = ws.get_all_values()
     df = pd.DataFrame(data[1:], columns=[h.strip().upper() for h in data[0]])
     
+    # 🎯 Mappatura Colonne Intelligente
     c_nom = next(c for c in df.columns if "CLIENTE" in c)
     c_ind = next(c for c in df.columns if "INDIRIZZO" in c or "VIA" in c)
     c_com = next(c for c in df.columns if "COMUNE" in c)
@@ -125,8 +139,10 @@ if ws:
     c_att = next((c for c in df.columns if "ATTIVIT" in c), None)
     c_tel = next((c for c in df.columns if "TELEFONO" in c or "CELL" in c or "TEL" in c), None)
     c_piva = next((c for c in df.columns if "P.IVA" in c or "PIVA" in c), None)
-    c_codice = df.columns[7] if len(df.columns) > 7 else None
-    c_pos = df.columns[12] if len(df.columns) > 12 else None
+    
+    # Mappatura super-potenziata per CODICE e POS
+    c_codice = next((c for c in df.columns if "CODICE" in c.upper() or "COD " in c.upper() or "COD." in c.upper() or c.upper() == "COD"), None)
+    c_pos = next((c for c in df.columns if "POS" in c.upper() or "DB_POS" in c.upper() or "DB" in c.upper()), None)
     
     c_cap = next((c for c in df.columns if "CAP" in c), None)
     if c_cap:
@@ -140,7 +156,7 @@ if ws:
     if 'db_tasks' not in st.session_state and ws_mem: 
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
-    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.29</div>", unsafe_allow_html=True)
+    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.30</div>", unsafe_allow_html=True)
     tab1, tab2 = st.tabs(["🚗 GIRO VISITE & NUOVI", "🛰️ RADAR 150m & TELEMACO"])
 
     # ==========================================
@@ -203,8 +219,11 @@ if ws:
                 for p in pool:
                     p['arr'] = curr_t
                     
-                    # Carica le spunte passate dalla memoria (se esistono)
-                    p['tasks_completed'] = st.session_state.db_tasks.get(p[c_nom], []) if not p['is_potenziale'] else []
+                    # Recupero sicuro delle spunte passate
+                    if not p['is_potenziale']:
+                        p['tasks_completed'] = copy.deepcopy(st.session_state.db_tasks.get(p[c_nom], []))
+                    else:
+                        p['tasks_completed'] = []
                     
                     if not p['is_potenziale']:
                         la, lo = pulisci_coordinata_italy(p.get(c_lat), True), pulisci_coordinata_italy(p.get(c_lon), False)
@@ -255,7 +274,9 @@ if ws:
                         if t_list:
                             st.markdown("**📝 Attività:**")
                             for task in t_list:
-                                is_chk = st.checkbox(task, value=(task in tasks_done), key=f"chk_{i}_{task}")
+                                # LA CHIAVE SICURA: Lega la spunta al NOME del cliente, non alla posizione "i"
+                                safe_client_name = re.sub(r'[^a-zA-Z0-9]', '', p[c_nom])
+                                is_chk = st.checkbox(task, value=(task in tasks_done), key=f"chk_{safe_client_name}_{task}")
                                 if is_chk and task not in tasks_done: tasks_done.append(task)
                                 elif not is_chk and task in tasks_done: tasks_done.remove(task)
                             p['tasks_completed'] = tasks_done
@@ -279,7 +300,6 @@ if ws:
                         with col_p2:
                             st.text_input("P.IVA Rilevata:", value=p.get("PIVA", ""), key=f"piva_{i}")
                     
-                    # Logica Tasto Concludi per Potenziali
                     pronto = esito_selezionato in ["Non interessato", "Chiuso"]
                 
                 c_dest = p.get('coords', SEDE_COORDS)
@@ -298,6 +318,10 @@ if ws:
                             if not pronto:
                                 st.warning("Per i clienti a DB devi spuntare 'CG' per concludere la visita!")
                             else:
+                                # SALVATAGGIO STORICO ATTIVITÀ
+                                st.session_state.db_tasks[p[c_nom]] = p['tasks_completed']
+                                if ws_mem: aggiorna_attivita_cliente(ws_mem, p[c_nom], p['tasks_completed'])
+                                
                                 st.session_state.master_route.pop(i)
                                 if ws_mem: ws_mem.update_acell("B2", json.dumps(st.session_state.master_route, default=str))
                                 st.rerun()
