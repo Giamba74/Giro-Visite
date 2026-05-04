@@ -164,7 +164,7 @@ if ws:
     if 'db_tasks' not in st.session_state and ws_mem: 
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
-    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.34</div>", unsafe_allow_html=True)
+    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.35</div>", unsafe_allow_html=True)
     tab1, tab2 = st.tabs(["🚗 GIRO VISITE & NUOVI", "🛰️ RADAR 150m & TELEMACO"])
 
     # ==========================================
@@ -201,20 +201,32 @@ if ws:
                 
                 for p in pool: p['is_potenziale'] = False
                 
+                # 🎯 INSERIMENTO POTENZIALI (CON BYPASS DEL CAP MANCANTE)
                 if num_potenziali > 0 and ws_pot:
                     try:
                         pot_recs = ws_pot.get_all_records()
                         pot_trovati = []
                         for r_idx, r in enumerate(pot_recs):
-                            if not r.get("DATA_VISITA") and r.get("STATO", "") == "✅ DISPONIBILE":
+                            stato = str(r.get("STATO", "")).upper()
+                            
+                            # Verifica che non sia stato già visitato
+                            if not r.get("DATA_VISITA") and ("✅" in stato or "OK" in stato or "DISPONIBILE" in stato):
+                                addr_pot = str(r.get("INDIRIZZO", ""))
+                                
                                 passa_filtro_cap = True
                                 if sel_cap_giro:
-                                    addr_pot = str(r.get("INDIRIZZO", ""))
-                                    if not any(cap in addr_pot for cap in sel_cap_giro): passa_filtro_cap = False
+                                    # Controlla se c'è un numero a 5 cifre (CAP) nell'indirizzo salvato
+                                    caps_in_addr = re.findall(r'\b\d{5}\b', addr_pot)
+                                    if caps_in_addr: 
+                                        # Se c'è un CAP nell'indirizzo, controlla che corrisponda a quello selezionato
+                                        if not any(cap in caps_in_addr for cap in sel_cap_giro): 
+                                            passa_filtro_cap = False
+                                    # Se non ci sono CAP nell'indirizzo (per via di vecchi salvataggi), passa_filtro_cap rimane True (fidandosi del Comune)
                                 
                                 passa_filtro_comune = True
                                 if sel_zona_giro:
-                                    if str(r.get("COMUNE", "")).upper() not in [c.upper() for c in sel_zona_giro]: passa_filtro_comune = False
+                                    if str(r.get("COMUNE", "")).upper() not in [c.upper() for c in sel_zona_giro]: 
+                                        passa_filtro_comune = False
                                         
                                 if passa_filtro_cap and passa_filtro_comune:
                                     p_new = {
@@ -381,7 +393,6 @@ if ws:
             with st.expander("➕ AGGIUNGI CLIENTE AL VOLO (Da Database)"):
                 st.markdown("Cerca un cliente non presente nel giro per aggiungerlo in coda.")
                 
-                # Filtra chi è già nel giro
                 nomi_nel_giro = [p[c_nom] for p in st.session_state.master_route]
                 clienti_cg_completati = [n for n, tasks in st.session_state.db_tasks.items() if any("CG" in str(t).upper() for t in tasks)]
                 
@@ -398,7 +409,6 @@ if ws:
                         p_new['is_potenziale'] = False
                         p_new['tasks_completed'] = copy.deepcopy(st.session_state.db_tasks.get(p_new[c_nom], []))
                         
-                        # Calcolo Orario (40 min dopo l'ultimo del giro)
                         if len(st.session_state.master_route) > 0:
                             ultimo_orario = st.session_state.master_route[-1]['arr']
                             if isinstance(ultimo_orario, str): 
@@ -407,7 +417,6 @@ if ws:
                         else:
                             p_new['arr'] = datetime.now(TZ_ITALY)
                             
-                        # Mappatura
                         la, lo = pulisci_coordinata_italy(p_new.get(c_lat), True), pulisci_coordinata_italy(p_new.get(c_lon), False)
                         p_new['coords'] = (la, lo) if la and lo else get_geo_data([f"{p_new[c_ind]}, {p_new[c_com]}, Italy"]) or SEDE_COORDS
                         
@@ -425,11 +434,16 @@ if ws:
         if file_tel:
             df_tel = pd.read_excel(file_tel, dtype=str) if file_tel.name.endswith('.xlsx') else pd.read_csv(file_tel, sep=None, engine='python', dtype=str)
             
-            c_t1, c_t2, c_t3 = st.columns(3)
+            # --- 🎯 NUOVA MAPPATURA CON COLONNA CAP ---
+            c_t1, c_t2, c_t3, c_t4 = st.columns(4)
             with c_t1: col_nome_tel = st.selectbox("Colonna Nome:", df_tel.columns, index=0)
             idx_ind_tel = next((i for i, c in enumerate(df_tel.columns) if "COMPLETO" in c.upper() or "INDIRIZZO" in c.upper()), 0)
             with c_t2: col_ind_tel = st.selectbox("Colonna Indirizzo:", df_tel.columns, index=idx_ind_tel)
             with c_t3: col_com_tel = st.selectbox("Colonna Comune:", df_tel.columns, index=next((i for i, c in enumerate(df_tel.columns) if "COMUNE" in c.upper()), 0))
+            
+            idx_cap_tel_default = next((i for i, c in enumerate(df_tel.columns) if "CAP" in c.upper()), -1)
+            opzioni_cap = ["Nessuna"] + list(df_tel.columns)
+            with c_t4: col_cap_tel = st.selectbox("Colonna CAP (Consigliata):", opzioni_cap, index=idx_cap_tel_default + 1 if idx_cap_tel_default != -1 else 0)
 
             modalita_cecchino = st.toggle("🎯 MODALITÀ CECCHINO (Filtra solo comuni del tuo database)", value=True)
             comuni_miei_puliti = [pulisci_nome(c) for c in df[c_com].unique() if str(c).strip()]
@@ -475,6 +489,12 @@ if ws:
                             civ = str(r_tel.iloc[8]).replace('nan', '').strip()
                             ind_t = f"{via} {civ}".strip()
                         except: ind_t = ""
+                        
+                    # 🎯 ESTRAZIONE E SALVATAGGIO CAP NEL RADAR
+                    if col_cap_tel != "Nessuna":
+                        cap_val = str(r_tel.get(col_cap_tel, '')).replace('.0', '').replace('nan', '').strip().zfill(5)
+                        if cap_val and cap_val not in ind_t:
+                            ind_t = f"{ind_t}, {cap_val}"
                     
                     t_c = get_geo_data([f"{ind_t}, {com_t_raw}, Italy", f"{com_t_raw}, Italy"])
                     if t_c:
