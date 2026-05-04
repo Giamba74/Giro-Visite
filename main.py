@@ -238,7 +238,6 @@ else:
     c_prem = next((c for c in df.columns if "PREMIUM" in c), None)
     c_piva = next((c for c in df.columns if "P.IVA" in c or "PIVA" in c), None)
     
-    # FORZATURA ASSOLUTA COLONNE H (Indice 7) e M (Indice 12)
     c_codice = df.columns[7] if len(df.columns) > 7 else None
     c_pos = df.columns[12] if len(df.columns) > 12 else None
     
@@ -378,7 +377,6 @@ else:
                 
                 prem_html = "<span class='badge prem-badge'>💎 PREMIUM</span>" if c_prem and p.get(c_prem) == 'SI' else ""
                 
-                # Creazione dei tags informativi usando le posizioni H e M forzate
                 piva_info = f"<span class='info-tag'>P.IVA: {p.get(c_piva, '')}</span>" if c_piva and str(p.get(c_piva, '')).strip() != 'nan' else ""
                 tel_info = f"<span class='info-tag'>📞 {tel_display}</span>" if tel_display else ""
                 codice_info = f"<span class='info-tag'>Codice: {p.get(c_codice, '')}</span>" if c_codice and str(p.get(c_codice, '')).strip() != 'nan' else ""
@@ -505,21 +503,26 @@ else:
                 st.write("👀 **Anteprima dei dati rilevati:**")
                 st.dataframe(df_tel.head(3), use_container_width=True)
                 
-                st.markdown("#### ⚙️ Associa le Colonne")
-                c_t1, c_t2, c_t3, c_t4 = st.columns(4)
+                # --- NUOVA MAPPA COLONNE CON MENU A TENDINA PER INDIRIZZO ---
+                st.markdown("#### ⚙️ Associa le Colonne (Anagrafica)")
+                c_t1, c_t2, c_t3 = st.columns(3)
                 
                 idx_nome = next((i for i, c in enumerate(df_tel.columns) if "DENOMINAZIONE" in c.upper()), 0)
                 with c_t1: col_nome_tel = st.selectbox("Colonna NOME AZIENDA:", df_tel.columns, index=idx_nome)
                 
-                idx_comune = next((i for i, c in enumerate(df_tel.columns) if "COMUNE" in c.upper()), 0)
-                with c_t2: col_com_tel = st.selectbox("Colonna COMUNE:", df_tel.columns, index=idx_comune)
+                idx_ind = next((i for i, c in enumerate(df_tel.columns) if "INDIRIZZO" in c.upper() or "VIA" in c.upper()), 0)
+                with c_t2: col_ind_tel = st.selectbox("Colonna INDIRIZZO:", df_tel.columns, index=idx_ind)
                 
+                idx_comune = next((i for i, c in enumerate(df_tel.columns) if "COMUNE" in c.upper()), 0)
+                with c_t3: col_com_tel = st.selectbox("Colonna COMUNE:", df_tel.columns, index=idx_comune)
+                
+                c_t4, c_t5 = st.columns(2)
                 opzioni_piva = ["Nessuna"] + list(df_tel.columns)
                 idx_piva_def = next((i for i, c in enumerate(opzioni_piva) if "P.IVA" in str(c).upper() or "PARTITA IVA" in str(c).upper()), 0)
-                with c_t3: col_piva_tel = st.selectbox("Colonna PARTITA IVA:", opzioni_piva, index=idx_piva_def)
+                with c_t4: col_piva_tel = st.selectbox("Colonna PARTITA IVA:", opzioni_piva, index=idx_piva_def)
                 
                 idx_cap = next((i for i, c in enumerate(df_tel.columns) if "CAP" in c.upper()), 0)
-                with c_t4: col_cap_tel = st.selectbox("Colonna CAP:", df_tel.columns, index=idx_cap)
+                with c_t5: col_cap_tel = st.selectbox("Colonna CAP:", df_tel.columns, index=idx_cap)
                 
                 st.markdown("#### ⚡ Coordinate per scansione Istantanea")
                 c_c1, c_c2 = st.columns(2)
@@ -613,9 +616,9 @@ else:
                                 if (se_piva and se_piva in pive_esistenti) or (n_az_pulito in nomi_esistenti_puliti):
                                     scartati_clienti += 1; continue 
                                 
-                                ind_target = f"{riga.get('Via', '')} {riga.get('N civico', '')}".strip()
-                                if not ind_target:
-                                    ind_target = str(riga.get('Indirizzo', ''))
+                                # IL NUOVO SISTEMA DI LETTURA INDIRIZZO 
+                                ind_target = str(riga.get(col_ind_tel, '')).strip()
+                                if ind_target == 'nan': ind_target = ""
                                     
                                 t_coords = None
                                 if col_lat_tel != "Nessuna (Cerca online lentamente)" and col_lon_tel != "Nessuna (Cerca online lentamente)":
