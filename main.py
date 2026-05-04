@@ -85,6 +85,16 @@ def pulisci_coordinata_italy(coord_str, is_lat=True):
         return None
     except: return None
 
+def salva_giro_memoria(ws_mem, rotta):
+    if not ws_mem: return
+    try:
+        rotta_copy = copy.deepcopy(rotta)
+        for p in rotta_copy:
+            if isinstance(p.get('arr'), datetime):
+                p['arr'] = p['arr'].strftime("%Y-%m-%d %H:%M:%S")
+        ws_mem.update_acell("B2", json.dumps(rotta_copy))
+    except: pass
+
 def carica_giro_da_foglio(sh_memoria):
     try:
         json_data = sh_memoria.acell("B2").value
@@ -92,7 +102,8 @@ def carica_giro_da_foglio(sh_memoria):
             rotta = json.loads(json_data)
             for p in rotta:
                 if 'arr' in p and isinstance(p['arr'], str):
-                    p['arr'] = datetime.strptime(p['arr'], "%Y-%m-%d %H:%M:%S")
+                    try: p['arr'] = datetime.strptime(p['arr'], "%Y-%m-%d %H:%M:%S")
+                    except: p['arr'] = pd.to_datetime(p['arr']).to_pydatetime()
                 if 'coords' not in p or p['coords'] is None: p['coords'] = SEDE_COORDS
                 if 'tasks_completed' not in p: p['tasks_completed'] = []
             return rotta
@@ -153,7 +164,7 @@ if ws:
     if 'db_tasks' not in st.session_state and ws_mem: 
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
-    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.31</div>", unsafe_allow_html=True)
+    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.34</div>", unsafe_allow_html=True)
     tab1, tab2 = st.tabs(["🚗 GIRO VISITE & NUOVI", "🛰️ RADAR 150m & TELEMACO"])
 
     # ==========================================
@@ -173,7 +184,7 @@ if ws:
             
         st.sidebar.divider()
         st.sidebar.markdown("### 🎯 Sviluppo Rete")
-        include_potenziali = st.sidebar.toggle("➕ Includi Potenziali nel Giro", value=True, help="Aggiunge al giro i nuovi bar trovati dal radar non ancora visitati.")
+        num_potenziali = st.sidebar.slider("🆕 Potenziali da inserire:", 0, 5, 1, help="Quanti bar nuovi aggiungere a questo giro")
 
         if st.button("🔄 CALCOLA NUOVO GIRO OTTIMIZZATO", type="primary", use_container_width=True):
             with st.spinner("IA sta calcolando la rotta includendo i nuovi obiettivi..."):
@@ -182,15 +193,18 @@ if ws:
                 if sel_cap_giro: mask &= df[c_cap].isin(sel_cap_giro)
                 if only_premium and c_prem: mask &= df[c_prem].astype(str).str.upper().str.contains('SI', na=False)
                 
-                # 🛡️ SCUDO ANTI-CLONI: Rimuovo i duplicati esatti dal dataframe prima di creare il pool
+                clienti_cg_completati = [n for n, tasks in st.session_state.db_tasks.items() if any("CG" in str(t).upper() for t in tasks)]
+                mask &= ~df[c_nom].isin(clienti_cg_completati)
+                
                 df_pulito = df[mask].drop_duplicates(subset=[c_nom])
                 pool = df_pulito.head(num_visite).to_dict('records')
                 
                 for p in pool: p['is_potenziale'] = False
                 
-                if include_potenziali and ws_pot:
+                if num_potenziali > 0 and ws_pot:
                     try:
                         pot_recs = ws_pot.get_all_records()
+                        pot_trovati = []
                         for r_idx, r in enumerate(pot_recs):
                             if not r.get("DATA_VISITA") and r.get("STATO", "") == "✅ DISPONIBILE":
                                 passa_filtro_cap = True
@@ -211,7 +225,10 @@ if ws:
                                         "PIVA": str(r.get("PIVA", "")).replace('nan',''),
                                         "row_idx": r_idx + 2 
                                     }
-                                    pool.append(p_new)
+                                    pot_trovati.append(p_new)
+                        
+                        if pot_trovati:
+                            pool.extend(pot_trovati[:num_potenziali])
                     except: pass
                 
                 rotta = []
@@ -234,9 +251,10 @@ if ws:
                     curr_t += timedelta(minutes=40)
                 
                 st.session_state.master_route = rotta
-                if ws_mem: ws_mem.update_acell("B2", json.dumps(rotta, default=str))
+                salva_giro_memoria(ws_mem, rotta)
                 st.rerun()
 
+        # VISUALIZZAZIONE DEL GIRO
         if st.session_state.get('master_route'):
             for i, p in enumerate(st.session_state.master_route):
                 is_pot = p.get('is_potenziale', False)
@@ -269,7 +287,6 @@ if ws:
                     
                     tasks_done = p.get('tasks_completed', [])
                     if c_att and p.get(c_att):
-                        # 🛡️ SCUDO ANTI-CLONI SULLE ATTIVITÀ: Elimino i duplicati dalla lista delle cose da fare (es. "CG, CD, CG" diventa "CG, CD")
                         raw_tasks = [t.strip() for t in str(p[c_att]).split(',') if t.strip() and t.lower() != 'nan']
                         t_list = list(dict.fromkeys(raw_tasks))
                         
@@ -278,7 +295,6 @@ if ws:
                             for t_idx, task in enumerate(t_list):
                                 safe_client_name = re.sub(r'[^a-zA-Z0-9]', '', str(p[c_nom]))
                                 safe_task = re.sub(r'[^a-zA-Z0-9]', '', task)
-                                # Chiave inscalfibile per Streamlit
                                 key_name = f"chk_{safe_client_name}_{safe_task}_{t_idx}"
                                 
                                 is_chk = st.checkbox(task, value=(task in tasks_done), key=key_name)
@@ -286,7 +302,6 @@ if ws:
                                 elif not is_chk and task in tasks_done: tasks_done.remove(task)
                             p['tasks_completed'] = tasks_done
                             
-                            # Logica Tasto Concludi (Solo per chi ha CG)
                             if any("CG" in t.upper() for t in t_list):
                                 pronto = any("CG" in t.upper() for t in tasks_done)
                 else:
@@ -326,8 +341,14 @@ if ws:
                                 st.session_state.db_tasks[p[c_nom]] = p['tasks_completed']
                                 if ws_mem: aggiorna_attivita_cliente(ws_mem, p[c_nom], p['tasks_completed'])
                                 
+                                try:
+                                    riga_cliente = df.index[df[c_nom] == p[c_nom]].tolist()[0] + 2
+                                    col_visita = list(df.columns).index(c_vis) + 1
+                                    ws.update_cell(riga_cliente, col_visita, "SI")
+                                except: pass
+                                
                                 st.session_state.master_route.pop(i)
-                                if ws_mem: ws_mem.update_acell("B2", json.dumps(st.session_state.master_route, default=str))
+                                salva_giro_memoria(ws_mem, st.session_state.master_route)
                                 st.rerun()
                 else:
                     c1, c2 = st.columns(2)
@@ -351,9 +372,50 @@ if ws:
                                     st.toast(f"Dati salvati per {p[c_nom]}!", icon="💾")
                                 
                                 st.session_state.master_route.pop(i)
-                                if ws_mem: ws_mem.update_acell("B2", json.dumps(st.session_state.master_route, default=str))
+                                salva_giro_memoria(ws_mem, st.session_state.master_route)
                                 st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
+
+            # 🎯 INNESTO DINAMICO (Aggiunta Cliente al Volo)
+            st.divider()
+            with st.expander("➕ AGGIUNGI CLIENTE AL VOLO (Da Database)"):
+                st.markdown("Cerca un cliente non presente nel giro per aggiungerlo in coda.")
+                
+                # Filtra chi è già nel giro
+                nomi_nel_giro = [p[c_nom] for p in st.session_state.master_route]
+                clienti_cg_completati = [n for n, tasks in st.session_state.db_tasks.items() if any("CG" in str(t).upper() for t in tasks)]
+                
+                mask_aggiunta = ~df[c_nom].isin(nomi_nel_giro) & ~df[c_nom].isin(clienti_cg_completati)
+                clienti_disponibili = sorted(df[mask_aggiunta][c_nom].dropna().unique().tolist())
+                
+                cliente_da_aggiungere = st.selectbox("Seleziona il cliente da inserire:", [""] + clienti_disponibili)
+                
+                if st.button("⚡ INSERISCI ORA", type="primary") and cliente_da_aggiungere:
+                    with st.spinner("Calcolo rotta per il nuovo cliente..."):
+                        riga_cliente = df[df[c_nom] == cliente_da_aggiungere].iloc[0]
+                        
+                        p_new = riga_cliente.to_dict()
+                        p_new['is_potenziale'] = False
+                        p_new['tasks_completed'] = copy.deepcopy(st.session_state.db_tasks.get(p_new[c_nom], []))
+                        
+                        # Calcolo Orario (40 min dopo l'ultimo del giro)
+                        if len(st.session_state.master_route) > 0:
+                            ultimo_orario = st.session_state.master_route[-1]['arr']
+                            if isinstance(ultimo_orario, str): 
+                                ultimo_orario = datetime.strptime(ultimo_orario, "%Y-%m-%d %H:%M:%S")
+                            p_new['arr'] = ultimo_orario + timedelta(minutes=40)
+                        else:
+                            p_new['arr'] = datetime.now(TZ_ITALY)
+                            
+                        # Mappatura
+                        la, lo = pulisci_coordinata_italy(p_new.get(c_lat), True), pulisci_coordinata_italy(p_new.get(c_lon), False)
+                        p_new['coords'] = (la, lo) if la and lo else get_geo_data([f"{p_new[c_ind]}, {p_new[c_com]}, Italy"]) or SEDE_COORDS
+                        
+                        st.session_state.master_route.append(p_new)
+                        salva_giro_memoria(ws_mem, st.session_state.master_route)
+                        st.toast(f"✅ {cliente_da_aggiungere} aggiunto al giro!", icon="🎯")
+                        time.sleep(1)
+                        st.rerun()
 
     # ==========================================
     # TAB 2: RADAR & TELEMACO
