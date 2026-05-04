@@ -91,13 +91,11 @@ def pulisci_coordinata_italy(coord_str, is_lat=True):
 # 🚶 MOTORE DI ROTTA PEDONALE (OSRM)
 def calcola_distanza_pedonale(coord_partenza, coord_arrivo):
     try:
-        # OSRM richiede format: lon,lat
         url = f"http://router.project-osrm.org/route/v1/foot/{coord_partenza[1]},{coord_partenza[0]};{coord_arrivo[1]},{coord_arrivo[0]}?overview=false"
         res = requests.get(url, timeout=3).json()
         if res.get("code") == "Ok":
             return res["routes"][0]["distance"]
     except: pass
-    # Fallback in caso di blocco API: Linea d'aria + 30% per simulare marciapiedi/ostacoli
     return geodesic(coord_partenza, coord_arrivo).meters * 1.30
 
 def salva_giro_memoria(ws_mem, rotta):
@@ -150,7 +148,6 @@ def agente_strategico(note):
 # --- AVVIO APP ---
 ws, ws_mem, ws_pot = connect_db()
 
-# --- INIZIALIZZAZIONE MEMORIA RADAR ---
 if 'radar_risultati' not in st.session_state: st.session_state.radar_risultati = None
 if 'radar_scarti' not in st.session_state: st.session_state.radar_scarti = None
 
@@ -184,8 +181,8 @@ if ws:
     if 'db_tasks' not in st.session_state and ws_mem: 
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
-    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.38</div>", unsafe_allow_html=True)
-    tab1, tab2 = st.tabs(["🚗 GIRO VISITE & NUOVI", "🛰️ RADAR 150m (PEDONALE) & TELEMACO"])
+    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.39</div>", unsafe_allow_html=True)
+    tab1, tab2 = st.tabs(["🚗 GIRO VISITE & NUOVI", "🛰️ RADAR 150m & TELEMACO"])
 
     # ==========================================
     # TAB 1: GIRO VISITE 
@@ -195,11 +192,11 @@ if ws:
         indirizzo_start = st.sidebar.text_input("📍 Partenza:", value="Chianti, Sede")
         num_visite = st.sidebar.slider("🚗 Clienti DB:", 1, 30, 8)
         only_premium = st.sidebar.toggle("💎 Solo PREMIUM", value=True)
-        sel_zona_giro = st.sidebar.multiselect("🌍 Filtra Comune:", sorted([str(c) for c in df[c_com].unique() if str(c).strip()]))
+        sel_zona_giro = st.sidebar.multiselect("🌍 Filtra Comune:", sorted([str(c).strip() for c in df[c_com].unique() if str(c).strip()]))
         
         sel_cap_giro = []
         if c_cap:
-            lista_cap = sorted([str(x) for x in df[c_cap].unique() if str(x).strip()])
+            lista_cap = sorted([str(x).strip() for x in df[c_cap].unique() if str(x).strip()])
             sel_cap_giro = st.sidebar.multiselect("📮 Filtra CAP:", lista_cap)
             
         st.sidebar.divider()
@@ -208,10 +205,17 @@ if ws:
 
         if st.button("🔄 CALCOLA NUOVO GIRO OTTIMIZZATO", type="primary", use_container_width=True):
             with st.spinner("IA sta calcolando la rotta includendo i nuovi obiettivi..."):
+                # Pulizia stringhe filtro
+                sel_zona_clean = [c.strip().upper() for c in sel_zona_giro]
+                sel_cap_clean = [c.strip() for c in sel_cap_giro]
+
                 mask = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
-                if sel_zona_giro: mask &= df[c_com].isin(sel_zona_giro)
-                if sel_cap_giro: mask &= df[c_cap].isin(sel_cap_giro)
-                if only_premium and c_prem: mask &= df[c_prem].astype(str).str.upper().str.contains('SI', na=False)
+                if sel_zona_clean: 
+                    mask &= df[c_com].astype(str).str.strip().str.upper().isin(sel_zona_clean)
+                if sel_cap_clean: 
+                    mask &= df[c_cap].astype(str).str.strip().isin(sel_cap_clean)
+                if only_premium and c_prem: 
+                    mask &= df[c_prem].astype(str).str.upper().str.contains('SI', na=False)
                 
                 clienti_cg_completati = [n for n, tasks in st.session_state.db_tasks.items() if any("CG" in str(t).upper() for t in tasks)]
                 mask &= ~df[c_nom].isin(clienti_cg_completati)
@@ -221,40 +225,47 @@ if ws:
                 
                 for p in pool: p['is_potenziale'] = False
                 
+                # 🎯 INSERIMENTO POTENZIALI (BLINDATO CONTRO SPAZI E ERRORI)
                 if num_potenziali > 0 and ws_pot:
                     try:
                         pot_recs = ws_pot.get_all_records()
                         pot_trovati = []
                         for r_idx, r in enumerate(pot_recs):
-                            stato = str(r.get("STATO", "")).upper()
+                            stato = str(r.get("STATO", "")).strip().upper()
+                            # Strip per evitare che spazi vuoti ingannino il controllo
+                            data_visita = str(r.get("DATA_VISITA", "")).strip() 
                             
-                            if not r.get("DATA_VISITA") and ("✅" in stato or "OK" in stato or "DISPONIBILE" in stato):
-                                addr_pot = str(r.get("INDIRIZZO", ""))
+                            if not data_visita and ("✅" in stato or "OK" in stato or "DISPONIBILE" in stato):
+                                addr_pot = str(r.get("INDIRIZZO", "")).strip()
+                                comune_pot = str(r.get("COMUNE", "")).strip().upper()
                                 
                                 passa_filtro_cap = True
-                                if sel_cap_giro:
+                                if sel_cap_clean:
                                     caps_in_addr = re.findall(r'\b\d{5}\b', addr_pot)
                                     if caps_in_addr: 
-                                        if not any(cap in caps_in_addr for cap in sel_cap_giro): passa_filtro_cap = False
+                                        if not any(cap in caps_in_addr for cap in sel_cap_clean): passa_filtro_cap = False
                                 
                                 passa_filtro_comune = True
-                                if sel_zona_giro:
-                                    if str(r.get("COMUNE", "")).upper() not in [c.upper() for c in sel_zona_giro]: passa_filtro_comune = False
+                                if sel_zona_clean:
+                                    if comune_pot not in sel_zona_clean: passa_filtro_comune = False
                                         
                                 if passa_filtro_cap and passa_filtro_comune:
                                     p_new = {
-                                        c_nom: r.get("CLIENTE", "Sconosciuto"),
-                                        c_ind: r.get("INDIRIZZO", ""),
-                                        c_com: r.get("COMUNE", ""),
+                                        c_nom: str(r.get("CLIENTE", "Sconosciuto")).strip(),
+                                        c_ind: addr_pot,
+                                        c_com: comune_pot,
                                         "is_potenziale": True,
-                                        "PIVA": str(r.get("PIVA", "")).replace('nan',''),
+                                        "PIVA": str(r.get("PIVA", "")).replace('nan','').strip(),
                                         "row_idx": r_idx + 2 
                                     }
                                     pot_trovati.append(p_new)
                         
                         if pot_trovati:
                             pool.extend(pot_trovati[:num_potenziali])
-                    except: pass
+                        else:
+                            st.toast("⚠️ Nessun nuovo potenziale trovato in questa specifica Zona/CAP.", icon="⚠️")
+                    except Exception as e: 
+                        st.error(f"Errore tecnico nel caricare i potenziali: {e}")
                 
                 rotta = []
                 curr_t = datetime.now(TZ_ITALY).replace(hour=9, minute=0)
@@ -508,12 +519,10 @@ if ws:
                     
                     t_c = get_geo_data([f"{ind_t}, {com_t_raw}, Italy", f"{com_t_raw}, Italy"])
                     if t_c:
-                        # 🛡️ CONTROLLO DOPPIO: PRIMA ARIA, POI PIEDI
                         vicino = False
                         for pc in premium_coords:
                             dist_aria = geodesic(t_c, pc).meters
                             if dist_aria <= 150:
-                                # Se in linea d'aria è un potenziale rischio, misuro a piedi
                                 dist_pedonale = calcola_distanza_pedonale(t_c, pc)
                                 if dist_pedonale <= 150:
                                     vicino = True
@@ -532,12 +541,12 @@ if ws:
                 c1,c2,c3,c4 = st.columns(4)
                 c1.metric("Fuori Zona", scarti["ZONA"])
                 c2.metric("Già Clienti", scarti["CLIENTI"])
-                c3.metric("Troppo Vicini (<150m a piedi)", scarti["RADAR"])
+                c3.metric("Troppo Vicini (<150m)", scarti["RADAR"])
                 c4.metric("Errori Mappa", scarti["MAPPA"])
                 
                 if st.session_state.radar_risultati:
                     df_res = pd.DataFrame(st.session_state.radar_risultati, columns=["CLIENTE", "INDIRIZZO", "COMUNE", "STATO"])
-                    st.success(f"🎯 Radar completato! Trovati {len(st.session_state.radar_risultati)} bar validi (distanza pedonale sicura).")
+                    st.success(f"🎯 Radar completato! Trovati {len(st.session_state.radar_risultati)} bar validi.")
                     
                     if st.button("💾 SALVA TUTTI IN 'POTENZIALI'", use_container_width=True, type="primary"):
                         if not ws_pot:
