@@ -237,7 +237,6 @@ else:
     c_prem = next((c for c in df.columns if "PREMIUM" in c), None)
     c_piva = next((c for c in df.columns if "P.IVA" in c or "PIVA" in c), None)
     
-    # Migliorata la ricerca delle colonne Lat/Lon per trovarle sempre!
     c_lat = next((c for c in df.columns if "LAT" in c.upper()), None)
     c_lon = next((c for c in df.columns if "LON" in c.upper()), None)
     
@@ -252,7 +251,7 @@ else:
     
     if 'db_tasks' not in st.session_state and ws_mem: st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
-    # --- SIDEBAR DESIGN (REINSERITO IL CAP) ---
+    # --- SIDEBAR DESIGN ---
     with st.sidebar:
         st.markdown("<h2 style='text-align: center; color: #38bdf8; margin-bottom: 20px;'>⚙️ Impostazioni</h2>", unsafe_allow_html=True)
         indirizzo_start = st.text_input("📍 Luogo di Partenza:", value="Chianti, Sede")
@@ -261,7 +260,6 @@ else:
         only_premium = st.toggle("💎 Mostra solo PREMIUM", value=True)
         sel_zona = st.multiselect("🌍 Filtra per Zona (Comuni)", sorted(df[c_com].dropna().unique()))
         
-        # Filtro CAP Ripristinato!
         sel_cap = []
         if c_cap:
             lista_cap = sorted([str(x) for x in df[c_cap].dropna().unique() if str(x).strip() != ""])
@@ -292,7 +290,7 @@ else:
             
             mask_standard = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
             if sel_zona: mask_standard &= df[c_com].isin(sel_zona)
-            if sel_cap: mask_standard &= df[c_cap].isin(sel_cap) # Applica il filtro CAP!
+            if sel_cap: mask_standard &= df[c_cap].isin(sel_cap)
             if only_premium and c_prem: mask_standard &= df[c_prem].astype(str).str.upper().str.contains('SI', na=False)
 
             clienti_cg_completato = [n for n, t in st.session_state.db_tasks.items() if any("CG" in str(x).upper() for x in t)]
@@ -375,7 +373,6 @@ else:
                 prem_html = "<span class='badge prem-badge'>💎 PREMIUM</span>" if c_prem and p.get(c_prem) == 'SI' else ""
                 task_badge_html = "<span class='badge done-badge'>✅ CD FATTO</span>" if any("CD" in str(t).upper() for t in st.session_state.db_tasks.get(p[c_nom], [])) else ""
                 
-                # Ripristinate le informazioni complete!
                 piva_info = f" | P.IVA: {p.get(c_piva, '')}" if c_piva and str(p.get(c_piva, '')).strip() != 'nan' else ""
                 
                 st.markdown(f"""
@@ -395,7 +392,6 @@ else:
                         if is_chk and task not in tasks_done: tasks_done.append(task)
                         elif not is_chk and task in tasks_done: tasks_done.remove(task)
                 
-                # Ripristinato il bottone CHIAMA!
                 c1, c2, c3 = st.columns(3)
                 with c1: 
                     if p['g_data'].get('found'): st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={p['g_data']['coords'][0]},{p['g_data']['coords'][1]}", use_container_width=True)
@@ -439,7 +435,7 @@ else:
         with c_r2: n_piva = st.text_input("P.IVA:", placeholder="Opzionale")
         c_r3, c_r4 = st.columns(2)
         with c_r3: n_ind = st.text_input("Indirizzo:", placeholder="Es. Via Roma 15")
-        with c_r4: n_com = st.selectbox("Comune:", sorted(df[c_com].unique()))
+        with c_r4: n_com = st.selectbox("Comune:", sorted(df[c_com].dropna().unique()))
         
         if st.button("📡 VERIFICA DISTANZA PEDONALE", type="primary", use_container_width=True) and n_ind and n_nome:
             with st.spinner("Calcolo verso la rete Premium..."):
@@ -473,7 +469,7 @@ else:
 
         st.divider()
         
-        # --- CARICAMENTO FILE TELEMACO (MOTORE ENTERPRISE V5.16) ---
+        # --- CARICAMENTO FILE TELEMACO ---
         st.markdown("### 📂 Carica Lista Telemaco/InfoCamere")
         st.write("L'IA rimuoverà i già clienti e calcolerà i 150m. Lettura automatica di tutti i formati.")
         
@@ -548,16 +544,33 @@ else:
                         df_prem = df[df[c_prem].str.upper().str.contains("SI", na=False)].copy()
                         
                         if 'premium_coords_cache' not in st.session_state:
-                            st.info("⚡ FASE 1/2: Lettura Premium in corso...")
+                            st.info(f"⚡ FASE 1/2: Lettura dei {len(df_prem)} Premium in corso. Cerco colonne Lat/Lon in Google Sheets...")
+                            
+                            if c_lat and c_lon:
+                                st.success(f"✅ Colonne rilevate in Google Sheets: '{c_lat}' e '{c_lon}'")
+                            else:
+                                st.error("❌ ATTENZIONE: Non trovo le colonne LATITUDINE/LONGITUDINE su Google Sheets. Scansione lenta in corso...")
+                                
+                            prog_prem = st.progress(0)
                             premium_coords_cache = []
+                            coordinate_trovate_su_foglio = 0
+                            
                             for i, (_, p_row) in enumerate(df_prem.iterrows()):
-                                lat_val = pulisci_coordinata_italy(p_row.get(c_lat), True)
-                                lon_val = pulisci_coordinata_italy(p_row.get(c_lon), False)
-                                if lat_val and lon_val: premium_coords_cache.append((lat_val, lon_val))
+                                prog_prem.progress((i + 1) / len(df_prem), text=f"📍 Mappatura Premium: {p_row[c_nom]} ({i+1}/{len(df_prem)})")
+                                
+                                lat_val = pulisci_coordinata_italy(p_row.get(c_lat), True) if c_lat else None
+                                lon_val = pulisci_coordinata_italy(p_row.get(c_lon), False) if c_lon else None
+                                
+                                if lat_val and lon_val: 
+                                    premium_coords_cache.append((lat_val, lon_val))
+                                    coordinate_trovate_su_foglio += 1
                                 else:
                                     p_res = get_geo_data([f"{p_row[c_ind]}, {p_row[c_com]}, Italy"], fallback_city=p_row[c_com])
                                     if p_res: premium_coords_cache.append(p_res['coords'])
+                                    
                             st.session_state.premium_coords_cache = premium_coords_cache
+                            prog_prem.empty()
+                            st.info(f"📊 Rilevatore Anomalie: Letto dal foglio {coordinate_trovate_su_foglio} coordinate su {len(df_prem)}. Le altre le ho cercate su Internet.")
                         
                         premium_coords_cache = st.session_state.premium_coords_cache
                         nomi_esistenti_puliti = [pulisci_nome(n) for n in df[c_nom].astype(str).tolist()]
@@ -573,7 +586,7 @@ else:
                         prog_tel = st.progress(0)
                         for idx, riga in df_tel.iterrows():
                             try:
-                                prog_tel.progress((idx + 1) / len(df_tel))
+                                prog_tel.progress((idx + 1) / len(df_tel), text=f"🔍 FASE 2/2: Setaccio Telemaco ({idx+1}/{len(df_tel)})")
                                 n_az = str(riga[col_nome_tel]).strip(); n_az_pulito = pulisci_nome(n_az)
                                 comune_target = str(riga[col_com_tel]).upper().strip()
                                 cap_target = str(riga[col_cap_tel]).replace('.0', '').strip().zfill(5) if col_cap_tel else ""
@@ -618,6 +631,8 @@ else:
                                 risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, ind_target, comune_target, "⚠️ Errore Calcolo (Verifica a mano)", f"CAP: {cap_target}"])
                                 continue
                                 
+                        prog_tel.empty()
+                        
                         st.markdown("### 📊 Report")
                         c_rep1, c_rep2, c_rep3, c_rep4 = st.columns(4)
                         c_rep1.metric("🌍 Scartati Zona", scartati_zona)
