@@ -54,6 +54,12 @@ def connect_db():
         return ws_main, ws_mem, ws_pot
     except: return None, None, None
 
+def carica_storico_attivita(sh_memoria):
+    try:
+        raw = sh_memoria.get("D:E") 
+        return {row[0]: json.loads(row[1]) for row in raw[1:] if len(row) >= 2} if raw else {}
+    except: return {}
+
 def pulisci_coordinata_italy(coord_str, is_lat=True):
     if pd.isna(coord_str) or str(coord_str).strip() == "": return None
     c = str(coord_str).strip().replace(' ', '').replace(',', '.')
@@ -108,7 +114,6 @@ if ws:
     data = ws.get_all_values()
     df = pd.DataFrame(data[1:], columns=[h.strip().upper() for h in data[0]])
     
-    # Mappatura Colonne
     c_nom = next(c for c in df.columns if "CLIENTE" in c)
     c_ind = next(c for c in df.columns if "INDIRIZZO" in c or "VIA" in c)
     c_com = next(c for c in df.columns if "COMUNE" in c)
@@ -123,7 +128,6 @@ if ws:
     c_codice = df.columns[7] if len(df.columns) > 7 else None
     c_pos = df.columns[12] if len(df.columns) > 12 else None
     
-    # 🎯 RECUPERO E PULIZIA CAP
     c_cap = next((c for c in df.columns if "CAP" in c), None)
     if c_cap:
         df[c_cap] = df[c_cap].astype(str).str.replace('.0', '', regex=False).str.replace('nan', '').str.strip()
@@ -131,12 +135,16 @@ if ws:
 
     if 'master_route' not in st.session_state and ws_mem:
         st.session_state.master_route = carica_giro_da_foglio(ws_mem)
+        
+    # Carica la memoria delle spunte passate
+    if 'db_tasks' not in st.session_state and ws_mem: 
+        st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
-    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.28</div>", unsafe_allow_html=True)
+    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.29</div>", unsafe_allow_html=True)
     tab1, tab2 = st.tabs(["🚗 GIRO VISITE & NUOVI", "🛰️ RADAR 150m & TELEMACO"])
 
     # ==========================================
-    # TAB 1: GIRO VISITE (CON FILTRO CAP)
+    # TAB 1: GIRO VISITE 
     # ==========================================
     with tab1:
         st.sidebar.markdown("### 🗺️ Opzioni Giro")
@@ -145,7 +153,6 @@ if ws:
         only_premium = st.sidebar.toggle("💎 Solo PREMIUM", value=True)
         sel_zona_giro = st.sidebar.multiselect("🌍 Filtra Comune:", sorted([str(c) for c in df[c_com].unique() if str(c).strip()]))
         
-        # --- NUOVO FILTRO CAP ---
         sel_cap_giro = []
         if c_cap:
             lista_cap = sorted([str(x) for x in df[c_cap].unique() if str(x).strip()])
@@ -157,34 +164,27 @@ if ws:
 
         if st.button("🔄 CALCOLA NUOVO GIRO OTTIMIZZATO", type="primary", use_container_width=True):
             with st.spinner("IA sta calcolando la rotta includendo i nuovi obiettivi..."):
-                # 1. Pesca Clienti Esistenti
                 mask = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
                 if sel_zona_giro: mask &= df[c_com].isin(sel_zona_giro)
-                if sel_cap_giro: mask &= df[c_cap].isin(sel_cap_giro) # Applicazione filtro CAP ai clienti
+                if sel_cap_giro: mask &= df[c_cap].isin(sel_cap_giro)
                 if only_premium and c_prem: mask &= df[c_prem].astype(str).str.upper().str.contains('SI', na=False)
                 
                 pool = df[mask].head(num_visite).to_dict('records')
                 for p in pool: p['is_potenziale'] = False
                 
-                # 2. Pesca Potenziali dal Foglio Google
                 if include_potenziali and ws_pot:
                     try:
                         pot_recs = ws_pot.get_all_records()
                         for r_idx, r in enumerate(pot_recs):
                             if not r.get("DATA_VISITA") and r.get("STATO", "") == "✅ DISPONIBILE":
-                                # Filtro CAP sui potenziali
                                 passa_filtro_cap = True
                                 if sel_cap_giro:
                                     addr_pot = str(r.get("INDIRIZZO", ""))
-                                    # Se nessuno dei CAP selezionati è presente nell'indirizzo del potenziale, lo scarta
-                                    if not any(cap in addr_pot for cap in sel_cap_giro):
-                                        passa_filtro_cap = False
+                                    if not any(cap in addr_pot for cap in sel_cap_giro): passa_filtro_cap = False
                                 
-                                # Filtro Comune sui potenziali (se attivo)
                                 passa_filtro_comune = True
                                 if sel_zona_giro:
-                                    if str(r.get("COMUNE", "")).upper() not in [c.upper() for c in sel_zona_giro]:
-                                        passa_filtro_comune = False
+                                    if str(r.get("COMUNE", "")).upper() not in [c.upper() for c in sel_zona_giro]: passa_filtro_comune = False
                                         
                                 if passa_filtro_cap and passa_filtro_comune:
                                     p_new = {
@@ -198,12 +198,13 @@ if ws:
                                     pool.append(p_new)
                     except: pass
                 
-                # 3. Creazione Rotta
                 rotta = []
                 curr_t = datetime.now(TZ_ITALY).replace(hour=9, minute=0)
                 for p in pool:
                     p['arr'] = curr_t
-                    p['tasks_completed'] = []
+                    
+                    # Carica le spunte passate dalla memoria (se esistono)
+                    p['tasks_completed'] = st.session_state.db_tasks.get(p[c_nom], []) if not p['is_potenziale'] else []
                     
                     if not p['is_potenziale']:
                         la, lo = pulisci_coordinata_italy(p.get(c_lat), True), pulisci_coordinata_italy(p.get(c_lon), False)
@@ -230,21 +231,22 @@ if ws:
                 """, unsafe_allow_html=True)
                 
                 pronto = True
+                
                 if not is_pot:
                     msg_c, style_c = agente_strategico(p.get(c_note_sto, ''))
                     st.markdown(f"<div class='strategy-box' style='{style_c}'>{msg_c}</div>", unsafe_allow_html=True)
                     
-                    tel = str(p.get(c_tel, '')).replace('nan', '') if c_tel else ''
-                    piva = str(p.get(c_piva, '')).replace('nan', '') if c_piva else ''
-                    cod = str(p.get(c_codice, '')).replace('nan', '') if c_codice else ''
-                    pos = str(p.get(c_pos, '')).replace('nan', '') if c_pos else ''
-                    cap_cliente = str(p.get(c_cap, '')).replace('nan', '') if c_cap else ''
+                    tel = str(p.get(c_tel, '')).replace('nan', '').strip() if c_tel else ''
+                    piva = str(p.get(c_piva, '')).replace('nan', '').strip() if c_piva else ''
+                    cod = str(p.get(c_codice, '')).replace('nan', '').strip() if c_codice else ''
+                    pos = str(p.get(c_pos, '')).replace('nan', '').strip() if c_pos else ''
+                    cap_cliente = str(p.get(c_cap, '')).replace('nan', '').strip() if c_cap else ''
                     
                     info_h = ""
                     if piva: info_h += f"<span class='info-tag'>P.IVA: {piva}</span>"
-                    if tel: info_h += f"<span class='info-tag'>📞 {tel}</span>"
                     if cod: info_h += f"<span class='info-tag'>Cod: {cod}</span>"
                     if pos: info_h += f"<span class='info-tag'>POS: {pos}</span>"
+                    if tel: info_h += f"<span class='info-tag'>📞 {tel}</span>"
                     st.markdown(f"<div class='info-row'>{info_h}</div>", unsafe_allow_html=True)
                     
                     tasks_done = p.get('tasks_completed', [])
@@ -258,50 +260,72 @@ if ws:
                                 elif not is_chk and task in tasks_done: tasks_done.remove(task)
                             p['tasks_completed'] = tasks_done
                             
+                            # Logica Tasto Concludi (Solo per chi ha CG)
                             if any("CG" in t.upper() for t in t_list):
                                 pronto = any("CG" in t.upper() for t in tasks_done)
                 else:
                     cap_cliente = "" 
                 
                 cap_display = f" (CAP: {cap_cliente})" if cap_cliente else ""
-                st.markdown(f"<div style='color:#94a3b8; font-weight:500;'>📍 {p.get(c_ind, '')}, {p.get(c_com, '')}{cap_display}</div></div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='color:#94a3b8; font-weight:500; margin-bottom: 15px;'>📍 {p.get(c_ind, '')}, {p.get(c_com, '')}{cap_display}</div>", unsafe_allow_html=True)
                 
+                esito_selezionato = ""
                 if is_pot:
                     with st.expander("📝 Compila Dati Esplorazione", expanded=True):
                         col_p1, col_p2 = st.columns(2)
                         with col_p1:
-                            st.selectbox("Esito:", ["Interessato", "Non interessato", "Da richiamare", "Chiuso"], key=f"esito_{i}")
+                            esito_selezionato = st.selectbox("Esito:", ["In Attesa", "Interessato", "Da richiamare", "Non interessato", "Chiuso"], key=f"esito_{i}")
                             st.text_input("Scoring (A, B, C):", key=f"score_{i}")
                         with col_p2:
                             st.text_input("P.IVA Rilevata:", value=p.get("PIVA", ""), key=f"piva_{i}")
+                    
+                    # Logica Tasto Concludi per Potenziali
+                    pronto = esito_selezionato in ["Non interessato", "Chiuso"]
                 
                 c_dest = p.get('coords', SEDE_COORDS)
                 if not isinstance(c_dest, (list, tuple)) or len(c_dest) < 2: c_dest = SEDE_COORDS
                 
-                c1, c2 = st.columns(2)
-                with c1: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={c_dest[0]},{c_dest[1]}", use_container_width=True)
-                with c2: 
-                    btn_label = "✅ CONCLUDI VISITA" if pronto else "⚠️ CHIUDI (Manca Spunta CG)"
-                    if st.button(btn_label, key=f"btn_close_{i}", use_container_width=True, type="primary" if pronto else "secondary"):
-                        if not pronto:
-                            st.warning("Devi prima mettere la spunta all'attività 'CG' per concludere il cliente!")
-                        else:
-                            if is_pot and ws_pot:
-                                riga = p['row_idx']
-                                data_visita = datetime.now(TZ_ITALY).strftime("%d/%m/%Y")
-                                esito = st.session_state.get(f"esito_{i}", "")
-                                scoring = st.session_state.get(f"score_{i}", "")
-                                piva = st.session_state.get(f"piva_{i}", "")
+                # PULSANTIERA
+                if not is_pot:
+                    c1, c2, c3 = st.columns([1, 1, 2])
+                    with c1: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={c_dest[0]},{c_dest[1]}", use_container_width=True)
+                    with c2: 
+                        if tel: st.link_button("📞 CHIAMA", f"tel:{tel}", use_container_width=True)
+                        else: st.button("📞 NO TEL", disabled=True, use_container_width=True)
+                    with c3: 
+                        btn_label = "✅ CONCLUDI VISITA" if pronto else "⚠️ MANCA SPUNTA CG"
+                        if st.button(btn_label, key=f"btn_close_{i}", use_container_width=True, type="primary" if pronto else "secondary"):
+                            if not pronto:
+                                st.warning("Per i clienti a DB devi spuntare 'CG' per concludere la visita!")
+                            else:
+                                st.session_state.master_route.pop(i)
+                                if ws_mem: ws_mem.update_acell("B2", json.dumps(st.session_state.master_route, default=str))
+                                st.rerun()
+                else:
+                    c1, c2 = st.columns(2)
+                    with c1: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={c_dest[0]},{c_dest[1]}", use_container_width=True)
+                    with c2: 
+                        btn_label = "✅ SALVA E CONCLUDI" if pronto else "⚠️ SELEZIONA ESITO"
+                        if st.button(btn_label, key=f"btn_close_{i}", use_container_width=True, type="primary" if pronto else "secondary"):
+                            if not pronto:
+                                st.warning("Per chiudere questo potenziale, l'esito deve essere 'Non interessato' o 'Chiuso'.")
+                            else:
+                                if ws_pot:
+                                    riga = p['row_idx']
+                                    data_visita = datetime.now(TZ_ITALY).strftime("%d/%m/%Y")
+                                    scoring = st.session_state.get(f"score_{i}", "")
+                                    piva = st.session_state.get(f"piva_{i}", "")
+                                    
+                                    ws_pot.update_cell(riga, 6, data_visita)
+                                    ws_pot.update_cell(riga, 7, esito_selezionato)
+                                    ws_pot.update_cell(riga, 8, scoring)
+                                    ws_pot.update_cell(riga, 9, piva)
+                                    st.toast(f"Dati salvati per {p[c_nom]}!", icon="💾")
                                 
-                                ws_pot.update_cell(riga, 6, data_visita)
-                                ws_pot.update_cell(riga, 7, esito)
-                                ws_pot.update_cell(riga, 8, scoring)
-                                ws_pot.update_cell(riga, 9, piva)
-                                st.toast(f"Dati salvati per {p[c_nom]}!", icon="💾")
-                            
-                            st.session_state.master_route.pop(i)
-                            if ws_mem: ws_mem.update_acell("B2", json.dumps(st.session_state.master_route, default=str))
-                            st.rerun()
+                                st.session_state.master_route.pop(i)
+                                if ws_mem: ws_mem.update_acell("B2", json.dumps(st.session_state.master_route, default=str))
+                                st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
 
     # ==========================================
     # TAB 2: RADAR & TELEMACO
