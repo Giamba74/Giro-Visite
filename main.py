@@ -54,19 +54,37 @@ def connect_db():
         return ws_main, ws_log, ws_mem, ws_pot
     except: return None, None, None, None
 
+def pulisci_coordinata_italy(coord_str, is_lat=True):
+    if pd.isna(coord_str) or str(coord_str).strip() == "": return None
+    c = str(coord_str).strip().replace(' ', '').replace(',', '.')
+    try: 
+        val = float(c)
+        if abs(val) > 100:
+            while abs(val) > 90: val = val / 10.0
+        if is_lat and (35 < val < 48): return val
+        if not is_lat and (6 < val < 20): return val
+        return None
+    except: return None
+
 def carica_giro_da_foglio(sh_memoria):
     try:
         json_data = sh_memoria.acell("B2").value
         if json_data:
             rotta = json.loads(json_data)
             for p in rotta:
-                if p.get('arr') and isinstance(p['arr'], str):
+                if 'arr' in p and isinstance(p['arr'], str):
                     p['arr'] = datetime.strptime(p['arr'], "%Y-%m-%d %H:%M:%S")
+                # Se mancano le coords, prova a ricostruirle dai dati salvati
+                if 'coords' not in p or p['coords'] is None:
+                    lat = pulisci_coordinata_italy(p.get('LATITUDINE'))
+                    lon = pulisci_coordinata_italy(p.get('LONGITUDINE'), False)
+                    p['coords'] = (lat, lon) if lat and lon else SEDE_COORDS
             return rotta
     except: return None
+    return None
 
 def get_geo_data(query_list):
-    geolocator = Nominatim(user_agent=f"brightstar_v523_{int(time.time())}")
+    geolocator = Nominatim(user_agent=f"brightstar_v524_{int(time.time())}")
     time.sleep(1.2)
     for q in query_list:
         try:
@@ -77,16 +95,6 @@ def get_geo_data(query_list):
 
 def pulisci_nome(nome):
     return ' '.join(re.sub(r'[^A-Z0-9\s]', '', str(nome).upper()).split())
-
-def pulisci_coordinata_italy(coord_str, is_lat=True):
-    if pd.isna(coord_str) or str(coord_str).strip() == "": return None
-    c = str(coord_str).strip().replace(' ', '').replace(',', '.')
-    try: 
-        val = float(c)
-        if abs(val) > 100:
-            while abs(val) > 90: val = val / 10.0
-        return val if (35 < val < 48 if is_lat else 6 < val < 20) else None
-    except: return None
 
 def agente_strategico(note):
     if not note: return "ℹ️ COACH: Nessuno storico.", "border-left-color: #475569;"
@@ -100,7 +108,7 @@ if ws:
     data = ws.get_all_values()
     df = pd.DataFrame(data[1:], columns=[h.strip().upper() for h in data[0]])
     
-    # Mappatura colonne DB Principale
+    # Mappatura colonne
     c_nom = next(c for c in df.columns if "CLIENTE" in c)
     c_ind = next(c for c in df.columns if "INDIRIZZO" in c or "VIA" in c)
     c_com = next(c for c in df.columns if "COMUNE" in c)
@@ -110,16 +118,12 @@ if ws:
     c_lon = next((c for c in df.columns if "LON" in c.upper()), None)
     c_note_sto = next((c for c in df.columns if "STORICO" in c or "NOTE" in c), None)
 
-    # Ripristino Memoria
     if 'master_route' not in st.session_state and ws_mem:
         st.session_state.master_route = carica_giro_da_foglio(ws_mem)
 
-    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.23</div>", unsafe_allow_html=True)
+    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.24</div>", unsafe_allow_html=True)
     tab1, tab2 = st.tabs(["🚗 GIRO VISITE", "🛰️ RADAR 150m & TELEMACO"])
 
-    # ==========================================
-    # TAB 1: GIRO VISITE (REINTEGRATO)
-    # ==========================================
     with tab1:
         with st.sidebar:
             indirizzo_start = st.text_input("📍 Partenza:", value="Chianti, Sede")
@@ -138,10 +142,9 @@ if ws:
                 curr_t = datetime.now(TZ_ITALY).replace(hour=9, minute=0)
                 for p in pool:
                     p['arr'] = curr_t
-                    # Mappatura rapida coords
                     la = pulisci_coordinata_italy(p.get(c_lat), True)
                     lo = pulisci_coordinata_italy(p.get(c_lon), False)
-                    p['coords'] = (la, lo) if la else SEDE_COORDS
+                    p['coords'] = (la, lo) if la and lo else SEDE_COORDS
                     rotta.append(p)
                     curr_t += timedelta(minutes=40)
                 
@@ -160,60 +163,49 @@ if ws:
                     <div style="color:#94a3b8;">📍 {p[c_ind]}, {p[c_com]}</div>
                 </div>
                 """, unsafe_allow_html=True)
+                
+                # --- SISTEMA NAVIGA ANTI-CRASH ---
+                c_dest = p.get('coords', SEDE_COORDS)
+                if not isinstance(c_dest, (list, tuple)) or len(c_dest) < 2:
+                    c_dest = SEDE_COORDS
+                
                 c1, c2 = st.columns(2)
-                with c1: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={p['coords'][0]},{p['coords'][1]}", use_container_width=True)
+                with c1: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={c_dest[0]},{c_dest[1]}", use_container_width=True)
                 with c2: 
                     if st.button("✅ CHIUDI", key=f"f_{i}", use_container_width=True):
                         st.session_state.master_route.pop(i)
                         if ws_mem: ws_mem.update_acell("B2", json.dumps(st.session_state.master_route, default=str))
                         st.rerun()
 
-    # ==========================================
-    # TAB 2: RADAR & TELEMACO (POTENZIATO)
-    # ==========================================
     with tab2:
         file_tel = st.file_uploader("Carica File Telemaco", type=['xlsx', 'csv'])
         if file_tel:
             df_tel = pd.read_excel(file_tel, dtype=str) if file_tel.name.endswith('.xlsx') else pd.read_csv(file_tel, sep=None, engine='python', dtype=str)
             
-            # Selezione Colonne
-            st.markdown("#### ⚙️ Associazione Colonne")
             c_t1, c_t2, c_t3 = st.columns(3)
             with c_t1: col_nome_tel = st.selectbox("Nome:", df_tel.columns, index=0)
             idx_ind_tel = next((i for i, c in enumerate(df_tel.columns) if "COMPLETO" in c.upper() or "INDIRIZZO" in c.upper()), 0)
             with c_t2: col_ind_tel = st.selectbox("Indirizzo:", df_tel.columns, index=idx_ind_tel)
             with c_t3: col_com_tel = st.selectbox("Comune:", df_tel.columns, index=next((i for i, c in enumerate(df_tel.columns) if "COMUNE" in c.upper()), 0))
 
-            # Anteprima e Diagnosi
             st.info("👀 **Anteprima Indirizzi:**")
             for _, r_pre in df_tel.head(3).iterrows():
                 val_i = str(r_pre.get(col_ind_tel, '')).strip()
                 if "Indirizzo" in val_i or val_i in ["", "nan"]:
-                    try: val_i = f"{r_pre.iloc[7]} {r_pre.iloc[8]}, {r_pre.iloc[13]}" # Fallback Telemaco
-                    except: val_i = "ERRORE LETTURA"
+                    try: val_i = f"{r_pre.iloc[7]} {r_pre.iloc[8]}, {r_pre.iloc[13]}"
+                    except: val_i = "ERRORE"
                 st.write(f"🔹 {r_pre[col_nome_tel]} -> **{val_i}**")
 
-            # Filtro Cecchino con selezione manuale
-            st.divider()
-            comuni_miei = sorted(df[c_com].unique())
             modalita_cecchino = st.toggle("🎯 CECCHINO (Filtra solo comuni conosciuti)", value=True)
-            
-            if not modalita_cecchino:
-                comuni_file = sorted(df_tel[col_com_tel].unique())
-                sel_comuni_scansione = st.multiselect("🌍 Scegli quali comuni scansionare dal file:", comuni_file, default=comuni_file[:5])
-            else:
-                sel_comuni_scansione = comuni_miei
-                st.caption(f"L'App cercherà solo in: {', '.join(comuni_miei[:10])}...")
+            comuni_miei = sorted([str(c).upper() for c in df[c_com].unique()])
 
             if st.button("🚀 AVVIA SCANSIONE", type="primary", use_container_width=True):
-                # 1. Cache Coords Premium
                 df_prem = df[df[c_prem].str.upper().contains("SI", na=False)].copy() if c_prem else df.head(0)
                 premium_coords = []
                 for _, pr in df_prem.iterrows():
                     la, lo = pulisci_coordinata_italy(pr.get(c_lat),True), pulisci_coordinata_italy(pr.get(c_lon),False)
                     if la: premium_coords.append((la, lo))
                 
-                # 2. Loop Scansione
                 risultati_ok = []
                 scarti = {"ZONA": 0, "CLIENTI": 0, "RADAR": 0, "MAPPA": 0}
                 nomi_miei = [pulisci_nome(n) for n in df[c_nom].unique()]
@@ -224,18 +216,16 @@ if ws:
                     com_t = str(r_tel[col_com_tel]).upper().strip()
                     nome_t = pulisci_nome(r_tel[col_nome_tel])
                     
-                    if com_t not in [c.upper() for c in sel_comuni_scansione]:
+                    if modalita_cecchino and com_t not in comuni_miei:
                         scarti["ZONA"] += 1; continue
                     if nome_t in nomi_miei:
                         scarti["CLIENTI"] += 1; continue
                     
-                    # Indirizzo Pulito
                     ind_t = str(r_tel.get(col_ind_tel, '')).strip()
                     if "Indirizzo" in ind_t or ind_t in ["", "nan"]:
                         try: ind_t = f"{r_tel.iloc[7]} {r_tel.iloc[8]}"
                         except: ind_t = "Unknown"
                     
-                    # GPS e Radar
                     t_c = get_geo_data([f"{ind_t}, {com_t}, Italy"])
                     if t_c:
                         vicino = any(geodesic(t_c, pc).meters < 150 for pc in premium_coords)
@@ -243,7 +233,6 @@ if ws:
                         else: risultati_ok.append([nome_t, ind_t, com_t, "✅ DISPONIBILE"])
                     else: scarti["MAPPA"] += 1
 
-                # Report
                 st.markdown("### 📊 Report")
                 c1,c2,c3,c4 = st.columns(4)
                 c1.metric("Fuori Zona", scarti["ZONA"])
@@ -254,6 +243,4 @@ if ws:
                 if risultati_ok:
                     df_res = pd.DataFrame(risultati_ok, columns=["CLIENTE", "INDIRIZZO", "COMUNE", "STATO"])
                     st.dataframe(df_res, use_container_width=True)
-                    st.download_button("📥 SCARICA RISULTATI", df_res.to_csv(index=False, sep=";").encode('utf-8-sig'), "TARGET.csv")
-                else:
-                    st.warning("Nessun cliente trovato con i filtri attuali.")
+                    st.download_button("📥 SCARICA TARGET", df_res.to_csv(index=False, sep=";").encode('utf-8-sig'), "TARGET.csv")
