@@ -23,11 +23,17 @@ st.markdown("""
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
     .stApp { font-family: 'Inter', sans-serif; background: radial-gradient(circle at top left, #1e293b 0%, #0f172a 100%); color: #f1f5f9; }
     .app-header { background: linear-gradient(90deg, #2563eb, #8b5cf6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-size: 2.5rem; font-weight: 800; text-align: center; margin-bottom: 30px; letter-spacing: -1px;}
+    .client-card { background: linear-gradient(145deg, rgba(30, 41, 59, 0.85), rgba(15, 23, 42, 0.9)); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 20px; padding: 24px; margin-bottom: 16px; box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5); }
+    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 12px; }
+    .arrival-time { background: linear-gradient(135deg, #3b82f6, #6366f1); color: white; padding: 6px 16px; border-radius: 30px; font-weight: 700; }
+    .strategy-box { padding: 12px 16px; border-radius: 10px; margin-bottom: 18px; font-size: 0.95em; border-left: 5px solid; background: rgba(0,0,0,0.25); }
     .report-card { background: rgba(30, 41, 59, 0.5); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 15px; padding: 20px; text-align: center; }
-    .metric-val { font-size: 2rem; font-weight: 800; color: #38bdf8; }
-    .metric-lbl { font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; }
+    .metric-val { font-size: 1.8rem; font-weight: 800; color: #38bdf8; }
     </style>
     """, unsafe_allow_html=True)
+
+COORDS = { "Chianti": (43.661888, 11.305728), "Firenze": (43.7696, 11.2558), "Arezzo": (43.4631, 11.8781) }
+SEDE_COORDS = COORDS["Chianti"]
 
 # ==============================================================================
 # 👇 MODIFICA SOLO QUI SOTTO CON IL TUO VERO ID FOGLIO GOOGLE 👇
@@ -48,8 +54,19 @@ def connect_db():
         return ws_main, ws_log, ws_mem, ws_pot
     except: return None, None, None, None
 
+def carica_giro_da_foglio(sh_memoria):
+    try:
+        json_data = sh_memoria.acell("B2").value
+        if json_data:
+            rotta = json.loads(json_data)
+            for p in rotta:
+                if p.get('arr') and isinstance(p['arr'], str):
+                    p['arr'] = datetime.strptime(p['arr'], "%Y-%m-%d %H:%M:%S")
+            return rotta
+    except: return None
+
 def get_geo_data(query_list):
-    geolocator = Nominatim(user_agent=f"brightstar_v522_{int(time.time())}")
+    geolocator = Nominatim(user_agent=f"brightstar_v523_{int(time.time())}")
     time.sleep(1.2)
     for q in query_list:
         try:
@@ -71,90 +88,154 @@ def pulisci_coordinata_italy(coord_str, is_lat=True):
         return val if (35 < val < 48 if is_lat else 6 < val < 20) else None
     except: return None
 
-# --- CARICAMENTO DATI ---
+def agente_strategico(note):
+    if not note: return "ℹ️ COACH: Nessuno storico.", "border-left-color: #475569;"
+    txt = str(note).lower()
+    if any(x in txt for x in ['arrabbiato', 'reclamo']): return "🛡️ COACH: Cliente a rischio.", "border-left-color: #ef4444;"
+    return f"ℹ️ MEMO: {note[:50]}...", "border-left-color: #3b82f6;"
+
+# --- AVVIO APP ---
 ws, ws_ai, ws_mem, ws_pot = connect_db()
 if ws:
     data = ws.get_all_values()
     df = pd.DataFrame(data[1:], columns=[h.strip().upper() for h in data[0]])
+    
+    # Mappatura colonne DB Principale
     c_nom = next(c for c in df.columns if "CLIENTE" in c)
     c_ind = next(c for c in df.columns if "INDIRIZZO" in c or "VIA" in c)
     c_com = next(c for c in df.columns if "COMUNE" in c)
+    c_vis = next(c for c in df.columns if "VISITATO" in c)
     c_prem = next((c for c in df.columns if "PREMIUM" in c), None)
     c_lat = next((c for c in df.columns if "LAT" in c.upper()), None)
     c_lon = next((c for c in df.columns if "LON" in c.upper()), None)
+    c_note_sto = next((c for c in df.columns if "STORICO" in c or "NOTE" in c), None)
 
-    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.22</div>", unsafe_allow_html=True)
-    
+    # Ripristino Memoria
+    if 'master_route' not in st.session_state and ws_mem:
+        st.session_state.master_route = carica_giro_da_foglio(ws_mem)
+
+    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.23</div>", unsafe_allow_html=True)
     tab1, tab2 = st.tabs(["🚗 GIRO VISITE", "🛰️ RADAR 150m & TELEMACO"])
 
+    # ==========================================
+    # TAB 1: GIRO VISITE (REINTEGRATO)
+    # ==========================================
+    with tab1:
+        with st.sidebar:
+            indirizzo_start = st.text_input("📍 Partenza:", value="Chianti, Sede")
+            num_visite = st.slider("🚗 Clienti:", 1, 20, 8)
+            only_premium = st.toggle("💎 Solo PREMIUM", value=True)
+            sel_zona_giro = st.multiselect("🌍 Filtra Comune:", sorted(df[c_com].unique()))
+
+        if st.button("🔄 CALCOLA NUOVO GIRO", type="primary", use_container_width=True):
+            with st.spinner("IA in azione..."):
+                mask = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
+                if sel_zona_giro: mask &= df[c_com].isin(sel_zona_giro)
+                if only_premium and c_prem: mask &= df[c_prem].astype(str).str.upper().contains('SI', na=False)
+                
+                pool = df[mask].head(num_visite).to_dict('records')
+                rotta = []
+                curr_t = datetime.now(TZ_ITALY).replace(hour=9, minute=0)
+                for p in pool:
+                    p['arr'] = curr_t
+                    # Mappatura rapida coords
+                    la = pulisci_coordinata_italy(p.get(c_lat), True)
+                    lo = pulisci_coordinata_italy(p.get(c_lon), False)
+                    p['coords'] = (la, lo) if la else SEDE_COORDS
+                    rotta.append(p)
+                    curr_t += timedelta(minutes=40)
+                
+                st.session_state.master_route = rotta
+                if ws_mem: 
+                    ws_mem.update_acell("B2", json.dumps(rotta, default=str))
+
+        if st.session_state.get('master_route'):
+            for i, p in enumerate(st.session_state.master_route):
+                msg_c, style_c = agente_strategico(p.get(c_note_sto, ''))
+                st.markdown(f"""
+                <div class="client-card">
+                    <div class="card-header"><div class="arrival-time">{pd.to_datetime(p['arr']).strftime('%H:%M')}</div></div>
+                    <div style="font-size:1.3rem; font-weight:bold;">{i+1}. {p[c_nom]}</div>
+                    <div class="strategy-box" style="{style_c}">{msg_c}</div>
+                    <div style="color:#94a3b8;">📍 {p[c_ind]}, {p[c_com]}</div>
+                </div>
+                """, unsafe_allow_html=True)
+                c1, c2 = st.columns(2)
+                with c1: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={p['coords'][0]},{p['coords'][1]}", use_container_width=True)
+                with c2: 
+                    if st.button("✅ CHIUDI", key=f"f_{i}", use_container_width=True):
+                        st.session_state.master_route.pop(i)
+                        if ws_mem: ws_mem.update_acell("B2", json.dumps(st.session_state.master_route, default=str))
+                        st.rerun()
+
+    # ==========================================
+    # TAB 2: RADAR & TELEMACO (POTENZIATO)
+    # ==========================================
     with tab2:
-        st.markdown("### 📂 Carica Lista Telemaco")
-        file_tel = st.file_uploader("Trascina il file Excel/CSV", type=['xlsx', 'xls', 'csv'])
-        
+        file_tel = st.file_uploader("Carica File Telemaco", type=['xlsx', 'csv'])
         if file_tel:
-            if file_tel.name.endswith('.csv'): df_tel = pd.read_csv(file_tel, sep=None, engine='python', dtype=str)
-            else: df_tel = pd.read_excel(file_tel, dtype=str)
+            df_tel = pd.read_excel(file_tel, dtype=str) if file_tel.name.endswith('.xlsx') else pd.read_csv(file_tel, sep=None, engine='python', dtype=str)
             
-            st.success(f"File caricato: {len(df_tel)} righe.")
-            
+            # Selezione Colonne
+            st.markdown("#### ⚙️ Associazione Colonne")
             c_t1, c_t2, c_t3 = st.columns(3)
-            idx_nome = next((i for i, c in enumerate(df_tel.columns) if "DENOMINAZIONE" in c.upper()), 0)
-            with c_t1: col_nome_tel = st.selectbox("Colonna NOME:", df_tel.columns, index=idx_nome)
-            idx_ind = next((i for i, c in enumerate(df_tel.columns) if "COMPLETO" in c.upper() or "INDIRIZZO" in c.upper()), 0)
-            with c_t2: col_ind_tel = st.selectbox("Colonna INDIRIZZO:", df_tel.columns, index=idx_ind)
-            idx_com = next((i for i, c in enumerate(df_tel.columns) if "COMUNE" in c.upper()), 0)
-            with c_t3: col_com_tel = st.selectbox("Colonna COMUNE:", df_tel.columns, index=idx_com)
+            with c_t1: col_nome_tel = st.selectbox("Nome:", df_tel.columns, index=0)
+            idx_ind_tel = next((i for i, c in enumerate(df_tel.columns) if "COMPLETO" in c.upper() or "INDIRIZZO" in c.upper()), 0)
+            with c_t2: col_ind_tel = st.selectbox("Indirizzo:", df_tel.columns, index=idx_ind_tel)
+            with c_t3: col_com_tel = st.selectbox("Comune:", df_tel.columns, index=next((i for i, c in enumerate(df_tel.columns) if "COMUNE" in c.upper()), 0))
 
-            st.info("👀 **ANTEPRIMA RICOSTRUZIONE INDIRIZZI:**")
-            for idx_p, r_p in df_tel.head(3).iterrows():
-                ind_v = str(r_p.get(col_ind_tel, '')).strip()
-                if "Indirizzo" in ind_v or ind_v in ["","nan"]:
-                    try: ind_v = f"{r_p.iloc[7]} {r_p.iloc[8]}, {r_p.iloc[13]}"
-                    except: ind_v = "NON RILEVATO"
-                st.write(f"🔹 {r_p[col_nome_tel]} -> **{ind_v}**")
+            # Anteprima e Diagnosi
+            st.info("👀 **Anteprima Indirizzi:**")
+            for _, r_pre in df_tel.head(3).iterrows():
+                val_i = str(r_pre.get(col_ind_tel, '')).strip()
+                if "Indirizzo" in val_i or val_i in ["", "nan"]:
+                    try: val_i = f"{r_pre.iloc[7]} {r_pre.iloc[8]}, {r_pre.iloc[13]}" # Fallback Telemaco
+                    except: val_i = "ERRORE LETTURA"
+                st.write(f"🔹 {r_pre[col_nome_tel]} -> **{val_i}**")
 
+            # Filtro Cecchino con selezione manuale
             st.divider()
-            modalita_cecchino = st.toggle("🎯 MODALITÀ CECCHINO (Filtra solo i tuoi Comuni)", value=True)
+            comuni_miei = sorted(df[c_com].unique())
+            modalita_cecchino = st.toggle("🎯 CECCHINO (Filtra solo comuni conosciuti)", value=True)
             
-            if st.button("🚀 AVVIA SCANSIONE COMPLETA", type="primary", use_container_width=True):
-                # 1. Cache Premium
-                df_prem = df[df[c_prem].str.upper().str.contains("SI", na=False)].copy()
-                st.info(f"⚡ FASE 1: Mappatura {len(df_prem)} Premium...")
+            if not modalita_cecchino:
+                comuni_file = sorted(df_tel[col_com_tel].unique())
+                sel_comuni_scansione = st.multiselect("🌍 Scegli quali comuni scansionare dal file:", comuni_file, default=comuni_file[:5])
+            else:
+                sel_comuni_scansione = comuni_miei
+                st.caption(f"L'App cercherà solo in: {', '.join(comuni_miei[:10])}...")
+
+            if st.button("🚀 AVVIA SCANSIONE", type="primary", use_container_width=True):
+                # 1. Cache Coords Premium
+                df_prem = df[df[c_prem].str.upper().contains("SI", na=False)].copy() if c_prem else df.head(0)
                 premium_coords = []
                 for _, pr in df_prem.iterrows():
-                    la = pulisci_coordinata_italy(pr.get(c_lat), True)
-                    lo = pulisci_coordinata_italy(pr.get(c_lon), False)
-                    if la and lo: premium_coords.append((la, lo))
+                    la, lo = pulisci_coordinata_italy(pr.get(c_lat),True), pulisci_coordinata_italy(pr.get(c_lon),False)
+                    if la: premium_coords.append((la, lo))
                 
-                # 2. Scansione
-                st.info("🛰️ FASE 2: Scansione Telemaco...")
+                # 2. Loop Scansione
                 risultati_ok = []
                 scarti = {"ZONA": 0, "CLIENTI": 0, "RADAR": 0, "MAPPA": 0}
-                
-                comuni_miei = [pulisci_nome(c) for c in df[c_com].unique()]
                 nomi_miei = [pulisci_nome(n) for n in df[c_nom].unique()]
                 
                 prog = st.progress(0)
                 for i, r_tel in df_tel.iterrows():
                     prog.progress((i+1)/len(df_tel))
-                    nome_t = pulisci_nome(r_tel[col_nome_tel])
                     com_t = str(r_tel[col_com_tel]).upper().strip()
+                    nome_t = pulisci_nome(r_tel[col_nome_tel])
                     
-                    # Filtro Zona
-                    if modalita_cecchino and pulisci_nome(com_t) not in comuni_miei:
+                    if com_t not in [c.upper() for c in sel_comuni_scansione]:
                         scarti["ZONA"] += 1; continue
-                    
-                    # Filtro Già Cliente
                     if nome_t in nomi_miei:
                         scarti["CLIENTI"] += 1; continue
                     
-                    # Indirizzo
+                    # Indirizzo Pulito
                     ind_t = str(r_tel.get(col_ind_tel, '')).strip()
-                    if "Indirizzo" in ind_t or ind_t in ["","nan"]:
+                    if "Indirizzo" in ind_t or ind_t in ["", "nan"]:
                         try: ind_t = f"{r_tel.iloc[7]} {r_tel.iloc[8]}"
-                        except: ind_t = "Sconosciuto"
+                        except: ind_t = "Unknown"
                     
-                    # Radar
+                    # GPS e Radar
                     t_c = get_geo_data([f"{ind_t}, {com_t}, Italy"])
                     if t_c:
                         vicino = any(geodesic(t_c, pc).meters < 150 for pc in premium_coords)
@@ -162,20 +243,17 @@ if ws:
                         else: risultati_ok.append([nome_t, ind_t, com_t, "✅ DISPONIBILE"])
                     else: scarti["MAPPA"] += 1
 
-                # 3. REPORT FINALE
-                st.markdown("### 📊 Risultato Scansione")
-                c1, c2, c3, c4 = st.columns(4)
-                c1.markdown(f"<div class='report-card'><div class='metric-val'>{scarti['ZONA']}</div><div class='metric-lbl'>Fuori Zona</div></div>", unsafe_allow_html=True)
-                c2.markdown(f"<div class='report-card'><div class='metric-val'>{scarti['CLIENTI']}</div><div class='metric-lbl'>Già Clienti</div></div>", unsafe_allow_html=True)
-                c3.markdown(f"<div class='report-card'><div class='metric-val'>{scarti['RADAR']}</div><div class='metric-lbl'>Troppo Vicini</div></div>", unsafe_allow_html=True)
-                c4.markdown(f"<div class='report-card'><div class='metric-val'>{scarti['MAPPA']}</div><div class='metric-lbl'>Mappa Fallita</div></div>", unsafe_allow_html=True)
+                # Report
+                st.markdown("### 📊 Report")
+                c1,c2,c3,c4 = st.columns(4)
+                c1.metric("Fuori Zona", scarti["ZONA"])
+                c2.metric("Già Clienti", scarti["CLIENTI"])
+                c3.metric("Troppo Vicini", scarti["RADAR"])
+                c4.metric("Errori Mappa", scarti["MAPPA"])
                 
                 if risultati_ok:
-                    st.success(f"🎯 Trovati {len(risultati_ok)} nuovi potenziali bar!")
-                    df_ok = pd.DataFrame(risultati_ok, columns=["NOME", "INDIRIZZO", "COMUNE", "STATO"])
-                    st.dataframe(df_ok, use_container_width=True)
-                    if st.button("💾 SALVA TUTTI IN POTENZIALI"):
-                        for row in risultati_ok: ws_pot.append_row([datetime.now().strftime("%d/%m/%Y"), "", row[0], row[1], row[2], "OK", ""])
-                        st.success("Salvato!")
+                    df_res = pd.DataFrame(risultati_ok, columns=["CLIENTE", "INDIRIZZO", "COMUNE", "STATO"])
+                    st.dataframe(df_res, use_container_width=True)
+                    st.download_button("📥 SCARICA RISULTATI", df_res.to_csv(index=False, sep=";").encode('utf-8-sig'), "TARGET.csv")
                 else:
-                    st.error("🚫 La scansione è finita, ma nessun bar ha superato i controlli. Controlla i contatori sopra per capire perché.")
+                    st.warning("Nessun cliente trovato con i filtri attuali.")
