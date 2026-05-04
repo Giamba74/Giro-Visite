@@ -164,7 +164,7 @@ if ws:
     if 'db_tasks' not in st.session_state and ws_mem: 
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
-    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.35</div>", unsafe_allow_html=True)
+    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.36</div>", unsafe_allow_html=True)
     tab1, tab2 = st.tabs(["🚗 GIRO VISITE & NUOVI", "🛰️ RADAR 150m & TELEMACO"])
 
     # ==========================================
@@ -201,7 +201,6 @@ if ws:
                 
                 for p in pool: p['is_potenziale'] = False
                 
-                # 🎯 INSERIMENTO POTENZIALI (CON BYPASS DEL CAP MANCANTE)
                 if num_potenziali > 0 and ws_pot:
                     try:
                         pot_recs = ws_pot.get_all_records()
@@ -209,24 +208,18 @@ if ws:
                         for r_idx, r in enumerate(pot_recs):
                             stato = str(r.get("STATO", "")).upper()
                             
-                            # Verifica che non sia stato già visitato
                             if not r.get("DATA_VISITA") and ("✅" in stato or "OK" in stato or "DISPONIBILE" in stato):
                                 addr_pot = str(r.get("INDIRIZZO", ""))
                                 
                                 passa_filtro_cap = True
                                 if sel_cap_giro:
-                                    # Controlla se c'è un numero a 5 cifre (CAP) nell'indirizzo salvato
                                     caps_in_addr = re.findall(r'\b\d{5}\b', addr_pot)
                                     if caps_in_addr: 
-                                        # Se c'è un CAP nell'indirizzo, controlla che corrisponda a quello selezionato
-                                        if not any(cap in caps_in_addr for cap in sel_cap_giro): 
-                                            passa_filtro_cap = False
-                                    # Se non ci sono CAP nell'indirizzo (per via di vecchi salvataggi), passa_filtro_cap rimane True (fidandosi del Comune)
+                                        if not any(cap in caps_in_addr for cap in sel_cap_giro): passa_filtro_cap = False
                                 
                                 passa_filtro_comune = True
                                 if sel_zona_giro:
-                                    if str(r.get("COMUNE", "")).upper() not in [c.upper() for c in sel_zona_giro]: 
-                                        passa_filtro_comune = False
+                                    if str(r.get("COMUNE", "")).upper() not in [c.upper() for c in sel_zona_giro]: passa_filtro_comune = False
                                         
                                 if passa_filtro_cap and passa_filtro_comune:
                                     p_new = {
@@ -388,7 +381,7 @@ if ws:
                                 st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            # 🎯 INNESTO DINAMICO (Aggiunta Cliente al Volo)
+            # 🎯 INNESTO DINAMICO
             st.divider()
             with st.expander("➕ AGGIUNGI CLIENTE AL VOLO (Da Database)"):
                 st.markdown("Cerca un cliente non presente nel giro per aggiungerlo in coda.")
@@ -434,7 +427,6 @@ if ws:
         if file_tel:
             df_tel = pd.read_excel(file_tel, dtype=str) if file_tel.name.endswith('.xlsx') else pd.read_csv(file_tel, sep=None, engine='python', dtype=str)
             
-            # --- 🎯 NUOVA MAPPATURA CON COLONNA CAP ---
             c_t1, c_t2, c_t3, c_t4 = st.columns(4)
             with c_t1: col_nome_tel = st.selectbox("Colonna Nome:", df_tel.columns, index=0)
             idx_ind_tel = next((i for i, c in enumerate(df_tel.columns) if "COMPLETO" in c.upper() or "INDIRIZZO" in c.upper()), 0)
@@ -490,11 +482,9 @@ if ws:
                             ind_t = f"{via} {civ}".strip()
                         except: ind_t = ""
                         
-                    # 🎯 ESTRAZIONE E SALVATAGGIO CAP NEL RADAR
                     if col_cap_tel != "Nessuna":
                         cap_val = str(r_tel.get(col_cap_tel, '')).replace('.0', '').replace('nan', '').strip().zfill(5)
-                        if cap_val and cap_val not in ind_t:
-                            ind_t = f"{ind_t}, {cap_val}"
+                        if cap_val and cap_val not in ind_t: ind_t = f"{ind_t}, {cap_val}"
                     
                     t_c = get_geo_data([f"{ind_t}, {com_t_raw}, Italy", f"{com_t_raw}, Italy"])
                     if t_c:
@@ -514,10 +504,22 @@ if ws:
                     df_res = pd.DataFrame(risultati_ok, columns=["CLIENTE", "INDIRIZZO", "COMUNE", "STATO"])
                     st.success(f"🎯 Radar completato! Trovati {len(risultati_ok)} bar validi.")
                     
+                    # 🛡️ SALVATAGGIO IN BLOCCO
                     if st.button("💾 SALVA TUTTI IN 'POTENZIALI'", use_container_width=True):
                         if ws_pot:
-                            if not ws_pot.acell("A1").value:
-                                ws_pot.append_row(["DATA_INS", "CLIENTE", "INDIRIZZO", "COMUNE", "STATO", "DATA_VISITA", "ESITO", "SCORING", "PIVA"])
-                            for row in risultati_ok:
-                                ws_pot.append_row([datetime.now(TZ_ITALY).strftime("%d/%m/%Y"), row[0], row[1], row[2], row[3], "", "", "", ""])
-                            st.success("Tutti i contatti salvati nel Foglio Google! Ora li vedrai nel Giro Visite.")
+                            with st.spinner("Salvataggio sul database in corso..."):
+                                try:
+                                    val_a1 = ws_pot.acell("A1").value
+                                    if not val_a1:
+                                        ws_pot.update("A1:I1", [["DATA_INS", "CLIENTE", "INDIRIZZO", "COMUNE", "STATO", "DATA_VISITA", "ESITO", "SCORING", "PIVA"]])
+                                    
+                                    nuove_righe = []
+                                    oggi_str = datetime.now(TZ_ITALY).strftime("%d/%m/%Y")
+                                    for row in risultati_ok:
+                                        nuove_righe.append([oggi_str, row[0], row[1], row[2], row[3], "", "", "", ""])
+                                    
+                                    if nuove_righe:
+                                        ws_pot.append_rows(nuove_righe, value_input_option='USER_ENTERED')
+                                        st.success("Tutti i contatti salvati nel Foglio Google! Ora li vedrai nel Giro Visite.")
+                                except Exception as e:
+                                    st.error(f"Errore nel salvataggio: Assicurati che il foglio POTENZIALI sia vuoto o abbia la prima riga compilata. Errore tecnico: {e}")
