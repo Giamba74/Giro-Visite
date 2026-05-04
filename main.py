@@ -29,7 +29,8 @@ st.markdown("""
     .client-name { font-size: 1.45rem; font-weight: 800; color: #ffffff; letter-spacing: -0.5px; }
     .arrival-time { background: linear-gradient(135deg, #3b82f6, #6366f1); color: white; padding: 6px 16px; border-radius: 30px; font-weight: 700; font-size: 1.1rem; }
     .strategy-box { padding: 12px 16px; border-radius: 10px; margin-bottom: 18px; font-size: 0.95em; color: #e2e8f0; border-left: 5px solid; background: rgba(0,0,0,0.25); font-weight: 500; }
-    .info-row { display: flex; gap: 15px; color: #94a3b8; font-size: 0.95rem; margin-bottom: 8px; font-weight: 500;}
+    .info-row { display: flex; flex-wrap: wrap; gap: 15px; color: #94a3b8; font-size: 0.95rem; margin-bottom: 8px; font-weight: 500;}
+    .info-tag { background: rgba(255, 255, 255, 0.05); padding: 4px 10px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.1); }
     .highlight { color: #38bdf8; font-weight: 700; }
     .ai-badge { font-size: 0.8rem; background-color: rgba(51, 65, 85, 0.8); color: #cbd5e1; padding: 3px 10px; border-radius: 6px; font-weight: 600;}
     .badge { padding: 4px 10px; border-radius: 8px; margin-right: 8px; font-size: 0.75rem; text-transform: uppercase; font-weight: 700; display: inline-block; margin-bottom: 5px;}
@@ -237,6 +238,10 @@ else:
     c_prem = next((c for c in df.columns if "PREMIUM" in c), None)
     c_piva = next((c for c in df.columns if "P.IVA" in c or "PIVA" in c), None)
     
+    # FORZATURA ASSOLUTA COLONNE H (Indice 7) e M (Indice 12)
+    c_codice = df.columns[7] if len(df.columns) > 7 else None
+    c_pos = df.columns[12] if len(df.columns) > 12 else None
+    
     c_lat = next((c for c in df.columns if "LAT" in c.upper()), None)
     c_lon = next((c for c in df.columns if "LON" in c.upper()), None)
     
@@ -368,20 +373,25 @@ else:
                 
             for i, p in enumerate(route):
                 ai_lbl = "AI" if p.get('learned') else "Std"
-                tel_display = str(p.get(c_tel, '')).strip() if str(p.get(c_tel, '')).strip() else p['g_data'].get('tel', '')
+                tel_display = str(p.get(c_tel, '')).strip() if str(p.get(c_tel, '')).strip() and str(p.get(c_tel, '')).strip() != 'nan' else p['g_data'].get('tel', '')
                 msg_coach, style_coach = agente_strategico(p.get(c_note_sto, ''))
-                prem_html = "<span class='badge prem-badge'>💎 PREMIUM</span>" if c_prem and p.get(c_prem) == 'SI' else ""
-                task_badge_html = "<span class='badge done-badge'>✅ CD FATTO</span>" if any("CD" in str(t).upper() for t in st.session_state.db_tasks.get(p[c_nom], [])) else ""
                 
-                piva_info = f" | P.IVA: {p.get(c_piva, '')}" if c_piva and str(p.get(c_piva, '')).strip() != 'nan' else ""
+                prem_html = "<span class='badge prem-badge'>💎 PREMIUM</span>" if c_prem and p.get(c_prem) == 'SI' else ""
+                
+                # Creazione dei tags informativi usando le posizioni H e M forzate
+                piva_info = f"<span class='info-tag'>P.IVA: {p.get(c_piva, '')}</span>" if c_piva and str(p.get(c_piva, '')).strip() != 'nan' else ""
+                tel_info = f"<span class='info-tag'>📞 {tel_display}</span>" if tel_display else ""
+                codice_info = f"<span class='info-tag'>Codice: {p.get(c_codice, '')}</span>" if c_codice and str(p.get(c_codice, '')).strip() != 'nan' else ""
+                pos_info = f"<span class='info-tag'>POS: {p.get(c_pos, '')}</span>" if c_pos and str(p.get(c_pos, '')).strip() != 'nan' else ""
                 
                 st.markdown(f"""
                 <div class="client-card">
-                <div class="card-header"><div>{task_badge_html}{prem_html}</div><div class="arrival-time">{p['arr'].strftime('%H:%M')}</div></div>
+                <div class="card-header"><div>{prem_html}</div><div class="arrival-time">{p['arr'].strftime('%H:%M')}</div></div>
                 <div style="margin-bottom: 15px;"><span class="client-name">{i+1}. {p[c_nom]}</span></div>
                 <div class="strategy-box" style="{style_coach}">{msg_coach}</div>
-                <div class="info-row"><span>📍 {p[c_ind]}, {p[c_com]} (CAP: {p.get(c_cap,'')}){piva_info}</span></div>
-                <div class="info-row"><span class="real-traffic">🚗 ~{p['travel_time']} min viaggio</span><span class="ai-badge">⏱️ Visita: {p['duration']} min</span></div>
+                <div class="info-row"><span>📍 {p[c_ind]}, {p[c_com]} (CAP: {p.get(c_cap,'')})</span></div>
+                <div class="info-row">{piva_info}{tel_info}{codice_info}{pos_info}</div>
+                <div class="info-row" style="margin-top: 10px;"><span class="real-traffic">🚗 ~{p['travel_time']} min viaggio</span><span class="ai-badge">⏱️ Visita: {p['duration']} min</span></div>
                 </div>""", unsafe_allow_html=True)
                 
                 tasks_done = p.get('tasks_completed', [])
@@ -570,7 +580,7 @@ else:
                                     
                             st.session_state.premium_coords_cache = premium_coords_cache
                             prog_prem.empty()
-                            st.info(f"📊 Rilevatore Anomalie: Letto dal foglio {coordinate_trovate_su_foglio} coordinate su {len(df_prem)}. Le altre le ho cercate su Internet.")
+                            st.info(f"📊 Rilevatore Anomalie: Letto dal foglio {coordinate_trovate_su_foglio} coordinate su {len(df_prem)}.")
                         
                         premium_coords_cache = st.session_state.premium_coords_cache
                         nomi_esistenti_puliti = [pulisci_nome(n) for n in df[c_nom].astype(str).tolist()]
