@@ -181,7 +181,7 @@ if ws:
     if 'db_tasks' not in st.session_state and ws_mem: 
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
-    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.39</div>", unsafe_allow_html=True)
+    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.40</div>", unsafe_allow_html=True)
     tab1, tab2 = st.tabs(["🚗 GIRO VISITE & NUOVI", "🛰️ RADAR 150m & TELEMACO"])
 
     # ==========================================
@@ -205,7 +205,6 @@ if ws:
 
         if st.button("🔄 CALCOLA NUOVO GIRO OTTIMIZZATO", type="primary", use_container_width=True):
             with st.spinner("IA sta calcolando la rotta includendo i nuovi obiettivi..."):
-                # Pulizia stringhe filtro
                 sel_zona_clean = [c.strip().upper() for c in sel_zona_giro]
                 sel_cap_clean = [c.strip() for c in sel_cap_giro]
 
@@ -225,47 +224,51 @@ if ws:
                 
                 for p in pool: p['is_potenziale'] = False
                 
-                # 🎯 INSERIMENTO POTENZIALI (BLINDATO CONTRO SPAZI E ERRORI)
+                # 🎯 L'ESTRATTORE DEFINITIVO (Matrice Grezza Google Sheets)
                 if num_potenziali > 0 and ws_pot:
                     try:
-                        pot_recs = ws_pot.get_all_records()
-                        pot_trovati = []
-                        for r_idx, r in enumerate(pot_recs):
-                            stato = str(r.get("STATO", "")).strip().upper()
-                            # Strip per evitare che spazi vuoti ingannino il controllo
-                            data_visita = str(r.get("DATA_VISITA", "")).strip() 
+                        pot_data = ws_pot.get_all_values()
+                        if len(pot_data) > 1:
+                            headers = [str(h).strip().upper() for h in pot_data[0]]
+                            pot_trovati = []
+                            for r_idx, row in enumerate(pot_data[1:]):
+                                r = {headers[i]: row[i] if i < len(row) else "" for i in range(len(headers))}
+                                
+                                stato = str(r.get("STATO", "")).strip().upper()
+                                data_visita = str(r.get("DATA_VISITA", "")).strip() 
+                                
+                                if not data_visita and ("✅" in stato or "OK" in stato or "DISPONIBILE" in stato):
+                                    addr_pot = str(r.get("INDIRIZZO", "")).strip()
+                                    comune_pot = str(r.get("COMUNE", "")).strip().upper()
+                                    
+                                    passa_filtro_cap = True
+                                    if sel_cap_clean:
+                                        caps_in_addr = re.findall(r'\b\d{5}\b', addr_pot)
+                                        if caps_in_addr: 
+                                            if not any(cap in caps_in_addr for cap in sel_cap_clean): passa_filtro_cap = False
+                                    
+                                    passa_filtro_comune = True
+                                    if sel_zona_clean:
+                                        # Controlla se la parola cercata è dentro il comune (es. "AREZZO" dentro "AREZZO (AR)")
+                                        if not any(z in comune_pot for z in sel_zona_clean): passa_filtro_comune = False
+                                            
+                                    if passa_filtro_cap and passa_filtro_comune:
+                                        p_new = {
+                                            c_nom: str(r.get("CLIENTE", "Sconosciuto")).strip(),
+                                            c_ind: addr_pot,
+                                            c_com: comune_pot,
+                                            "is_potenziale": True,
+                                            "PIVA": str(r.get("PIVA", "")).replace('nan','').strip(),
+                                            "row_idx": r_idx + 2 
+                                        }
+                                        pot_trovati.append(p_new)
                             
-                            if not data_visita and ("✅" in stato or "OK" in stato or "DISPONIBILE" in stato):
-                                addr_pot = str(r.get("INDIRIZZO", "")).strip()
-                                comune_pot = str(r.get("COMUNE", "")).strip().upper()
-                                
-                                passa_filtro_cap = True
-                                if sel_cap_clean:
-                                    caps_in_addr = re.findall(r'\b\d{5}\b', addr_pot)
-                                    if caps_in_addr: 
-                                        if not any(cap in caps_in_addr for cap in sel_cap_clean): passa_filtro_cap = False
-                                
-                                passa_filtro_comune = True
-                                if sel_zona_clean:
-                                    if comune_pot not in sel_zona_clean: passa_filtro_comune = False
-                                        
-                                if passa_filtro_cap and passa_filtro_comune:
-                                    p_new = {
-                                        c_nom: str(r.get("CLIENTE", "Sconosciuto")).strip(),
-                                        c_ind: addr_pot,
-                                        c_com: comune_pot,
-                                        "is_potenziale": True,
-                                        "PIVA": str(r.get("PIVA", "")).replace('nan','').strip(),
-                                        "row_idx": r_idx + 2 
-                                    }
-                                    pot_trovati.append(p_new)
-                        
-                        if pot_trovati:
-                            pool.extend(pot_trovati[:num_potenziali])
-                        else:
-                            st.toast("⚠️ Nessun nuovo potenziale trovato in questa specifica Zona/CAP.", icon="⚠️")
+                            if pot_trovati:
+                                pool.extend(pot_trovati[:num_potenziali])
+                            else:
+                                st.toast("⚠️ Nessun nuovo potenziale libero trovato con questi filtri Zona/CAP.", icon="⚠️")
                     except Exception as e: 
-                        st.error(f"Errore tecnico nel caricare i potenziali: {e}")
+                        st.error(f"Errore tecnico nell'Estrattore Potenziali: {e}")
                 
                 rotta = []
                 curr_t = datetime.now(TZ_ITALY).replace(hour=9, minute=0)
@@ -412,43 +415,82 @@ if ws:
                                 st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            # 🎯 INNESTO DINAMICO
+            # 🎯 INNESTO DINAMICO (Potenziato!)
             st.divider()
-            with st.expander("➕ AGGIUNGI CLIENTE AL VOLO (Da Database)"):
-                st.markdown("Cerca un cliente non presente nel giro per aggiungerlo in coda.")
+            with st.expander("➕ AGGIUNGI CLIENTE AL VOLO (Da Database o Potenziali)"):
+                st.markdown("Cerca un cliente o un potenziale libero per aggiungerlo in coda.")
                 
                 nomi_nel_giro = [p[c_nom] for p in st.session_state.master_route]
                 clienti_cg_completati = [n for n, tasks in st.session_state.db_tasks.items() if any("CG" in str(t).upper() for t in tasks)]
                 
+                # Lista 1: Clienti Normali
                 mask_aggiunta = ~df[c_nom].isin(nomi_nel_giro) & ~df[c_nom].isin(clienti_cg_completati)
                 clienti_disponibili = sorted(df[mask_aggiunta][c_nom].dropna().unique().tolist())
                 
-                cliente_da_aggiungere = st.selectbox("Seleziona il cliente da inserire:", [""] + clienti_disponibili)
+                # Lista 2: Potenziali Estratti dalla Matrice
+                potenziali_disponibili = []
+                if ws_pot:
+                    try:
+                        pot_data = ws_pot.get_all_values()
+                        if len(pot_data) > 1:
+                            headers = [str(h).strip().upper() for h in pot_data[0]]
+                            for r_idx, row in enumerate(pot_data[1:]):
+                                r = {headers[i]: row[i] if i < len(row) else "" for i in range(len(headers))}
+                                if not str(r.get("DATA_VISITA", "")).strip() and ("✅" in str(r.get("STATO", "")).upper() or "DISPONIBILE" in str(r.get("STATO", "")).upper()):
+                                    nome_pot = str(r.get("CLIENTE", "Sconosciuto")).strip()
+                                    if nome_pot and nome_pot not in nomi_nel_giro:
+                                        comune_pot = str(r.get("COMUNE", "")).strip().title()
+                                        potenziali_disponibili.append(f"🆕 {nome_pot} ({comune_pot}) [POTENZIALE]")
+                    except: pass
+                
+                tutti_disponibili = [""] + potenziali_disponibili + clienti_disponibili
+                cliente_da_aggiungere = st.selectbox("Seleziona il cliente da inserire:", tutti_disponibili)
                 
                 if st.button("⚡ INSERISCI ORA", type="primary") and cliente_da_aggiungere:
                     with st.spinner("Calcolo rotta per il nuovo cliente..."):
-                        riga_cliente = df[df[c_nom] == cliente_da_aggiungere].iloc[0]
+                        p_new = {}
+                        is_pot_selezionato = "🆕 " in cliente_da_aggiungere and "[POTENZIALE]" in cliente_da_aggiungere
                         
-                        p_new = riga_cliente.to_dict()
-                        p_new['is_potenziale'] = False
-                        p_new['tasks_completed'] = copy.deepcopy(st.session_state.db_tasks.get(p_new[c_nom], []))
-                        
-                        if len(st.session_state.master_route) > 0:
-                            ultimo_orario = st.session_state.master_route[-1]['arr']
-                            if isinstance(ultimo_orario, str): 
-                                ultimo_orario = datetime.strptime(ultimo_orario, "%Y-%m-%d %H:%M:%S")
-                            p_new['arr'] = ultimo_orario + timedelta(minutes=40)
+                        if is_pot_selezionato:
+                            clean_name = cliente_da_aggiungere.split(" (")[0].replace("🆕 ", "").strip()
+                            pot_data = ws_pot.get_all_values()
+                            headers = [str(h).strip().upper() for h in pot_data[0]]
+                            for r_idx, row in enumerate(pot_data[1:]):
+                                r = {headers[i]: row[i] if i < len(row) else "" for i in range(len(headers))}
+                                if str(r.get("CLIENTE", "")).strip() == clean_name:
+                                    p_new = {
+                                        c_nom: clean_name,
+                                        c_ind: str(r.get("INDIRIZZO", "")).strip(),
+                                        c_com: str(r.get("COMUNE", "")).strip().upper(),
+                                        "is_potenziale": True,
+                                        "PIVA": str(r.get("PIVA", "")).replace('nan','').strip(),
+                                        "row_idx": r_idx + 2 
+                                    }
+                                    break
                         else:
-                            p_new['arr'] = datetime.now(TZ_ITALY)
-                            
-                        la, lo = pulisci_coordinata_italy(p_new.get(c_lat), True), pulisci_coordinata_italy(p_new.get(c_lon), False)
-                        p_new['coords'] = (la, lo) if la and lo else get_geo_data([f"{p_new[c_ind]}, {p_new[c_com]}, Italy"]) or SEDE_COORDS
+                            riga_cliente = df[df[c_nom] == cliente_da_aggiungere].iloc[0]
+                            p_new = riga_cliente.to_dict()
+                            p_new['is_potenziale'] = False
                         
-                        st.session_state.master_route.append(p_new)
-                        salva_giro_memoria(ws_mem, st.session_state.master_route)
-                        st.toast(f"✅ {cliente_da_aggiungere} aggiunto al giro!", icon="🎯")
-                        time.sleep(1)
-                        st.rerun()
+                        if p_new:
+                            p_new['tasks_completed'] = copy.deepcopy(st.session_state.db_tasks.get(p_new[c_nom], [])) if not p_new.get('is_potenziale') else []
+                            
+                            if len(st.session_state.master_route) > 0:
+                                ultimo_orario = st.session_state.master_route[-1]['arr']
+                                if isinstance(ultimo_orario, str): 
+                                    ultimo_orario = datetime.strptime(ultimo_orario, "%Y-%m-%d %H:%M:%S")
+                                p_new['arr'] = ultimo_orario + timedelta(minutes=40)
+                            else:
+                                p_new['arr'] = datetime.now(TZ_ITALY)
+                                
+                            la, lo = pulisci_coordinata_italy(p_new.get(c_lat), True), pulisci_coordinata_italy(p_new.get(c_lon), False)
+                            p_new['coords'] = (la, lo) if la and lo else get_geo_data([f"{p_new[c_ind]}, {p_new[c_com]}, Italy"]) or SEDE_COORDS
+                            
+                            st.session_state.master_route.append(p_new)
+                            salva_giro_memoria(ws_mem, st.session_state.master_route)
+                            st.toast(f"✅ Aggiunto al giro!", icon="🎯")
+                            time.sleep(1)
+                            st.rerun()
 
     # ==========================================
     # TAB 2: RADAR & TELEMACO
