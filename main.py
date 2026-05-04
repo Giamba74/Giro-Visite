@@ -462,7 +462,7 @@ else:
 
         st.divider()
         
-        # --- CARICAMENTO FILE TELEMACO (MOTORE ENTERPRISE V5.15 MULTI-FORMAT) ---
+        # --- CARICAMENTO FILE TELEMACO (MOTORE ENTERPRISE V5.15 MULTI-FORMAT + SALVATAGGIO ERRORI) ---
         st.markdown("### 📂 Carica Lista Telemaco/InfoCamere")
         st.write("L'IA rimuoverà i già clienti e calcolerà i 150m. Lettura automatica di tutti i formati.")
         
@@ -474,16 +474,13 @@ else:
                 if file_tel.name.endswith('.csv'):
                     raw_data = file_tel.read()
                     try:
-                        # Prova con Punto e Virgola (;)
                         df_tel = pd.read_csv(io.BytesIO(raw_data), sep=';', encoding='latin1', dtype=str)
                         if len(df_tel.columns) <= 1: raise Exception()
                     except:
                         try:
-                            # Prova con Virgola (,)
                             df_tel = pd.read_csv(io.BytesIO(raw_data), sep=',', encoding='utf-8', dtype=str)
                             if len(df_tel.columns) <= 1: raise Exception()
                         except:
-                            # Prova con Tab (\t)
                             df_tel = pd.read_csv(io.BytesIO(raw_data), sep='\t', encoding='utf-16', dtype=str)
                 else:
                     df_tel = pd.read_excel(file_tel, dtype=str)
@@ -495,7 +492,6 @@ else:
                 st.markdown("#### ⚙️ Associa le Colonne")
                 c_t1, c_t2, c_t3, c_t4 = st.columns(4)
                 
-                # Tentativi di auto-matching intelligente
                 idx_nome = next((i for i, c in enumerate(df_tel.columns) if "DENOMINAZIONE" in c.upper()), 0)
                 with c_t1: col_nome_tel = st.selectbox("Colonna NOME AZIENDA:", df_tel.columns, index=idx_nome)
                 
@@ -583,6 +579,10 @@ else:
                                 se_piva = str(riga[col_piva_tel]).strip() if col_piva_tel != "Nessuna" else ""
                                 if (se_piva and se_piva in pive_esistenti) or (n_az_pulito in nomi_esistenti_puliti):
                                     scartati_clienti += 1; continue 
+                                
+                                ind_target = f"{riga.get('Via', '')} {riga.get('N civico', '')}".strip()
+                                if not ind_target:
+                                    ind_target = str(riga.get('Indirizzo', ''))
                                     
                                 t_coords = None
                                 if col_lat_tel != "Nessuna (Cerca online lentamente)" and col_lon_tel != "Nessuna (Cerca online lentamente)":
@@ -591,16 +591,23 @@ else:
                                     if t_lat and t_lon: t_coords = (t_lat, t_lon)
                                 
                                 if not t_coords:
-                                    ind_target = f"{riga.get('Via', '')} {riga.get('N civico', '')}, {comune_target}".strip()
-                                    t_res = get_geo_data([ind_target])
+                                    t_res = get_geo_data([f"{ind_target}, {comune_target}, Italy"])
                                     t_coords = t_res['coords'] if t_res else None
                                 
                                 if t_coords:
                                     violazione = any(get_walking_distance(t_coords, p_c) < 150 for p_c in premium_coords_cache)
-                                    if not violazione: risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, "Indirizzo File", comune_target, "✅ OK", f"CAP: {cap_target}"])
-                                    else: scartati_radar += 1
-                                else: scartati_gps += 1
-                            except: continue
+                                    if not violazione: 
+                                        risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, ind_target, comune_target, "✅ OK", f"CAP: {cap_target}"])
+                                    else: 
+                                        scartati_radar += 1
+                                else: 
+                                    scartati_gps += 1
+                                    # ORA VIENE AGGIUNTO ANCHE QUESTO ALLA LISTA E QUINDI A GOOGLE SHEETS!
+                                    risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, ind_target, comune_target, "⚠️ Mappa Fallita (Verifica a mano)", f"CAP: {cap_target}"])
+                            except Exception as e: 
+                                scartati_gps += 1
+                                risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, ind_target, comune_target, "⚠️ Errore Calcolo (Verifica a mano)", f"CAP: {cap_target}"])
+                                continue
                                 
                         st.markdown("### 📊 Report")
                         c_rep1, c_rep2, c_rep3, c_rep4 = st.columns(4)
@@ -611,7 +618,7 @@ else:
                         
                         if risultati_positivi:
                             for r in risultati_positivi: ws_pot.append_row(r)
-                            st.success(f"🎯 Bersagli trovati: {len(risultati_positivi)}!")
+                            st.success(f"🎯 Fatto! Trovati e salvati su Excel {len(risultati_positivi)} bar (sia quelli OK che quelli da verificare).")
                             st.balloons()
             except Exception as e:
                 st.error(f"Errore: {e}")
