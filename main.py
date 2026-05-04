@@ -138,7 +138,6 @@ def get_walking_distance(coords1, coords2):
         res = requests.get(url, timeout=5).json()
         if res['code'] == 'Ok': return int(res['routes'][0]['distance'])
     except: pass
-    
     try: return int(geodesic(coords1, coords2).meters * 1.3)
     except: return 999999 
 
@@ -203,12 +202,9 @@ def pulisci_coordinata_italy(coord_str, is_lat=True):
         
     try: 
         val = float(c)
-        while abs(val) > 90:
-            val = val / 10.0
-            
+        while abs(val) > 90: val = val / 10.0
         if is_lat and (val < 35 or val > 48): return None
         if not is_lat and (val < 6 or val > 20): return None
-        
         return val
     except: 
         return None
@@ -230,7 +226,7 @@ else:
         c_cap = next((c for c in df.columns if "CAP" in c), "CAP")
         c_vis = next(c for c in df.columns if "VISITATO" in c)
     except StopIteration:
-        st.error("❌ ERRORE: Colonne fondamentali mancanti nel Foglio 1.")
+        st.error("❌ ERRORE: Colonne fondamentali mancanti nel Foglio 1 di Google Sheets.")
         st.stop()
     
     c_tel = next((c for c in df.columns if "TELEFONO" in c or "CELL" in c or "TEL" in c), "TELEFONO")
@@ -241,8 +237,9 @@ else:
     c_prem = next((c for c in df.columns if "PREMIUM" in c), None)
     c_piva = next((c for c in df.columns if "P.IVA" in c or "PIVA" in c), None)
     
-    c_lat = next((c for c in df.columns if "LATITUDINE" in c), None)
-    c_lon = next((c for c in df.columns if "LONGITUDINE" in c), None)
+    # Migliorata la ricerca delle colonne Lat/Lon per trovarle sempre!
+    c_lat = next((c for c in df.columns if "LAT" in c.upper()), None)
+    c_lon = next((c for c in df.columns if "LON" in c.upper()), None)
     
     if "CAP" in df.columns: 
         df[c_cap] = df[c_cap].astype(str).str.replace('.0','').str.strip().str.zfill(5)
@@ -255,14 +252,21 @@ else:
     
     if 'db_tasks' not in st.session_state and ws_mem: st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
-    # --- SIDEBAR DESIGN ---
+    # --- SIDEBAR DESIGN (REINSERITO IL CAP) ---
     with st.sidebar:
         st.markdown("<h2 style='text-align: center; color: #38bdf8; margin-bottom: 20px;'>⚙️ Impostazioni</h2>", unsafe_allow_html=True)
         indirizzo_start = st.text_input("📍 Luogo di Partenza:", value="Chianti, Sede")
         num_visite = st.slider("🚗 Clienti da visitare:", 1, 25, 8)
         st.divider()
         only_premium = st.toggle("💎 Mostra solo PREMIUM", value=True)
-        sel_zona = st.multiselect("🌍 Filtra per Zona (Comuni)", sorted(df[c_com].unique()))
+        sel_zona = st.multiselect("🌍 Filtra per Zona (Comuni)", sorted(df[c_com].dropna().unique()))
+        
+        # Filtro CAP Ripristinato!
+        sel_cap = []
+        if c_cap:
+            lista_cap = sorted([str(x) for x in df[c_cap].dropna().unique() if str(x).strip() != ""])
+            sel_cap = st.multiselect("📮 Filtra per CAP", lista_cap)
+            
         st.divider()
         sel_forced = st.multiselect("⭐ Forzature (Clienti VIP):", sorted(df[c_nom].unique().tolist()))
         st.divider()
@@ -288,6 +292,7 @@ else:
             
             mask_standard = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
             if sel_zona: mask_standard &= df[c_com].isin(sel_zona)
+            if sel_cap: mask_standard &= df[c_cap].isin(sel_cap) # Applica il filtro CAP!
             if only_premium and c_prem: mask_standard &= df[c_prem].astype(str).str.upper().str.contains('SI', na=False)
 
             clienti_cg_completato = [n for n, t in st.session_state.db_tasks.items() if any("CG" in str(x).upper() for x in t)]
@@ -370,13 +375,16 @@ else:
                 prem_html = "<span class='badge prem-badge'>💎 PREMIUM</span>" if c_prem and p.get(c_prem) == 'SI' else ""
                 task_badge_html = "<span class='badge done-badge'>✅ CD FATTO</span>" if any("CD" in str(t).upper() for t in st.session_state.db_tasks.get(p[c_nom], [])) else ""
                 
+                # Ripristinate le informazioni complete!
+                piva_info = f" | P.IVA: {p.get(c_piva, '')}" if c_piva and str(p.get(c_piva, '')).strip() != 'nan' else ""
+                
                 st.markdown(f"""
                 <div class="client-card">
                 <div class="card-header"><div>{task_badge_html}{prem_html}</div><div class="arrival-time">{p['arr'].strftime('%H:%M')}</div></div>
                 <div style="margin-bottom: 15px;"><span class="client-name">{i+1}. {p[c_nom]}</span></div>
                 <div class="strategy-box" style="{style_coach}">{msg_coach}</div>
-                <div class="info-row"><span>📍 {p[c_ind]}, {p[c_com]}</span><span class="real-traffic">🚗 ~{p['travel_time']} min</span></div>
-                <div class="info-row"><span class="ai-badge">⏱️ Visita: {p['duration']} min</span><span class="highlight">📞 {tel_display}</span></div>
+                <div class="info-row"><span>📍 {p[c_ind]}, {p[c_com]} (CAP: {p.get(c_cap,'')}){piva_info}</span></div>
+                <div class="info-row"><span class="real-traffic">🚗 ~{p['travel_time']} min viaggio</span><span class="ai-badge">⏱️ Visita: {p['duration']} min</span></div>
                 </div>""", unsafe_allow_html=True)
                 
                 tasks_done = p.get('tasks_completed', [])
@@ -387,10 +395,13 @@ else:
                         if is_chk and task not in tasks_done: tasks_done.append(task)
                         elif not is_chk and task in tasks_done: tasks_done.remove(task)
                 
-                c1, c2 = st.columns(2)
+                # Ripristinato il bottone CHIAMA!
+                c1, c2, c3 = st.columns(3)
                 with c1: 
                     if p['g_data'].get('found'): st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={p['g_data']['coords'][0]},{p['g_data']['coords'][1]}", use_container_width=True)
                 with c2:
+                    if tel_display and tel_display != 'nan': st.link_button("📞 CHIAMA", f"tel:{tel_display}", use_container_width=True)
+                with c3:
                     pronto = True if not any("CG" in t.upper() for t in str(p.get(c_att, '')).split(',')) else any("CG" in t.upper() for t in tasks_done)
                     if st.button("✅ CONCLUDI" if pronto else "⚠️ CHIUDI", key=f"d_{i}", type="primary" if pronto else "secondary", use_container_width=True):
                         try:
@@ -462,7 +473,7 @@ else:
 
         st.divider()
         
-        # --- CARICAMENTO FILE TELEMACO (MOTORE ENTERPRISE V5.15 MULTI-FORMAT + SALVATAGGIO ERRORI) ---
+        # --- CARICAMENTO FILE TELEMACO (MOTORE ENTERPRISE V5.16) ---
         st.markdown("### 📂 Carica Lista Telemaco/InfoCamere")
         st.write("L'IA rimuoverà i già clienti e calcolerà i 150m. Lettura automatica di tutti i formati.")
         
@@ -470,7 +481,6 @@ else:
         
         if file_tel:
             try:
-                # --- LOGICA DI LETTURA AVANZATA ---
                 if file_tel.name.endswith('.csv'):
                     raw_data = file_tel.read()
                     try:
@@ -538,7 +548,7 @@ else:
                         df_prem = df[df[c_prem].str.upper().str.contains("SI", na=False)].copy()
                         
                         if 'premium_coords_cache' not in st.session_state:
-                            st.info("⚡ FASE 1/2: Lettura Premium...")
+                            st.info("⚡ FASE 1/2: Lettura Premium in corso...")
                             premium_coords_cache = []
                             for i, (_, p_row) in enumerate(df_prem.iterrows()):
                                 lat_val = pulisci_coordinata_italy(p_row.get(c_lat), True)
@@ -602,7 +612,6 @@ else:
                                         scartati_radar += 1
                                 else: 
                                     scartati_gps += 1
-                                    # ORA VIENE AGGIUNTO ANCHE QUESTO ALLA LISTA E QUINDI A GOOGLE SHEETS!
                                     risultati_positivi.append([datetime.now().strftime("%d/%m/%Y"), se_piva, n_az, ind_target, comune_target, "⚠️ Mappa Fallita (Verifica a mano)", f"CAP: {cap_target}"])
                             except Exception as e: 
                                 scartati_gps += 1
