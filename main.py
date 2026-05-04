@@ -49,8 +49,11 @@ def connect_db():
         client = gspread.authorize(creds)
         sh = client.open_by_key(ID_DEL_FOGLIO)
         ws_main = sh.get_worksheet(0)
-        ws_mem = sh.worksheet("MEMORIA_GIRO") if "MEMORIA_GIRO" in [w.title for w in sh.worksheets()] else None
-        ws_pot = sh.worksheet("POTENZIALI") if "POTENZIALI" in [w.title for w in sh.worksheets()] else None
+        
+        titoli_fogli = {w.title.strip().upper(): w for w in sh.worksheets()}
+        ws_mem = titoli_fogli.get("MEMORIA_GIRO")
+        ws_pot = titoli_fogli.get("POTENZIALI")
+        
         return ws_main, ws_mem, ws_pot
     except: return None, None, None
 
@@ -84,6 +87,18 @@ def pulisci_coordinata_italy(coord_str, is_lat=True):
         if not is_lat and (6 < val < 20): return val
         return None
     except: return None
+
+# 🚶 MOTORE DI ROTTA PEDONALE (OSRM)
+def calcola_distanza_pedonale(coord_partenza, coord_arrivo):
+    try:
+        # OSRM richiede format: lon,lat
+        url = f"http://router.project-osrm.org/route/v1/foot/{coord_partenza[1]},{coord_partenza[0]};{coord_arrivo[1]},{coord_arrivo[0]}?overview=false"
+        res = requests.get(url, timeout=3).json()
+        if res.get("code") == "Ok":
+            return res["routes"][0]["distance"]
+    except: pass
+    # Fallback in caso di blocco API: Linea d'aria + 30% per simulare marciapiedi/ostacoli
+    return geodesic(coord_partenza, coord_arrivo).meters * 1.30
 
 def salva_giro_memoria(ws_mem, rotta):
     if not ws_mem: return
@@ -134,6 +149,11 @@ def agente_strategico(note):
 
 # --- AVVIO APP ---
 ws, ws_mem, ws_pot = connect_db()
+
+# --- INIZIALIZZAZIONE MEMORIA RADAR ---
+if 'radar_risultati' not in st.session_state: st.session_state.radar_risultati = None
+if 'radar_scarti' not in st.session_state: st.session_state.radar_scarti = None
+
 if ws:
     data = ws.get_all_values()
     df = pd.DataFrame(data[1:], columns=[h.strip().upper() for h in data[0]])
@@ -164,8 +184,8 @@ if ws:
     if 'db_tasks' not in st.session_state and ws_mem: 
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
-    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.36</div>", unsafe_allow_html=True)
-    tab1, tab2 = st.tabs(["🚗 GIRO VISITE & NUOVI", "🛰️ RADAR 150m & TELEMACO"])
+    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.38</div>", unsafe_allow_html=True)
+    tab1, tab2 = st.tabs(["🚗 GIRO VISITE & NUOVI", "🛰️ RADAR 150m (PEDONALE) & TELEMACO"])
 
     # ==========================================
     # TAB 1: GIRO VISITE 
@@ -488,38 +508,58 @@ if ws:
                     
                     t_c = get_geo_data([f"{ind_t}, {com_t_raw}, Italy", f"{com_t_raw}, Italy"])
                     if t_c:
-                        vicino = any(geodesic(t_c, pc).meters < 150 for pc in premium_coords)
+                        # 🛡️ CONTROLLO DOPPIO: PRIMA ARIA, POI PIEDI
+                        vicino = False
+                        for pc in premium_coords:
+                            dist_aria = geodesic(t_c, pc).meters
+                            if dist_aria <= 150:
+                                # Se in linea d'aria è un potenziale rischio, misuro a piedi
+                                dist_pedonale = calcola_distanza_pedonale(t_c, pc)
+                                if dist_pedonale <= 150:
+                                    vicino = True
+                                    break
+                        
                         if vicino: scarti["RADAR"] += 1
                         else: risultati_ok.append([nome_t_pulito, ind_t, com_t_raw, "✅ DISPONIBILE"])
                     else: scarti["MAPPA"] += 1
 
+                st.session_state.radar_risultati = risultati_ok
+                st.session_state.radar_scarti = scarti
+
+            if st.session_state.radar_scarti is not None:
+                scarti = st.session_state.radar_scarti
                 st.markdown("### 📊 Report Scansione")
                 c1,c2,c3,c4 = st.columns(4)
                 c1.metric("Fuori Zona", scarti["ZONA"])
                 c2.metric("Già Clienti", scarti["CLIENTI"])
-                c3.metric("Troppo Vicini", scarti["RADAR"])
+                c3.metric("Troppo Vicini (<150m a piedi)", scarti["RADAR"])
                 c4.metric("Errori Mappa", scarti["MAPPA"])
                 
-                if risultati_ok:
-                    df_res = pd.DataFrame(risultati_ok, columns=["CLIENTE", "INDIRIZZO", "COMUNE", "STATO"])
-                    st.success(f"🎯 Radar completato! Trovati {len(risultati_ok)} bar validi.")
+                if st.session_state.radar_risultati:
+                    df_res = pd.DataFrame(st.session_state.radar_risultati, columns=["CLIENTE", "INDIRIZZO", "COMUNE", "STATO"])
+                    st.success(f"🎯 Radar completato! Trovati {len(st.session_state.radar_risultati)} bar validi (distanza pedonale sicura).")
                     
-                    # 🛡️ SALVATAGGIO IN BLOCCO
-                    if st.button("💾 SALVA TUTTI IN 'POTENZIALI'", use_container_width=True):
-                        if ws_pot:
-                            with st.spinner("Salvataggio sul database in corso..."):
+                    if st.button("💾 SALVA TUTTI IN 'POTENZIALI'", use_container_width=True, type="primary"):
+                        if not ws_pot:
+                            st.error("🚨 ERRORE: Non trovo il foglio 'POTENZIALI'.")
+                        else:
+                            with st.spinner("Scrittura sul database in corso... non chiudere..."):
                                 try:
                                     val_a1 = ws_pot.acell("A1").value
                                     if not val_a1:
-                                        ws_pot.update("A1:I1", [["DATA_INS", "CLIENTE", "INDIRIZZO", "COMUNE", "STATO", "DATA_VISITA", "ESITO", "SCORING", "PIVA"]])
+                                        ws_pot.insert_row(["DATA_INS", "CLIENTE", "INDIRIZZO", "COMUNE", "STATO", "DATA_VISITA", "ESITO", "SCORING", "PIVA"], index=1)
                                     
                                     nuove_righe = []
                                     oggi_str = datetime.now(TZ_ITALY).strftime("%d/%m/%Y")
-                                    for row in risultati_ok:
+                                    for row in st.session_state.radar_risultati:
                                         nuove_righe.append([oggi_str, row[0], row[1], row[2], row[3], "", "", "", ""])
                                     
                                     if nuove_righe:
                                         ws_pot.append_rows(nuove_righe, value_input_option='USER_ENTERED')
-                                        st.success("Tutti i contatti salvati nel Foglio Google! Ora li vedrai nel Giro Visite.")
+                                        st.success("✅ Salvataggio completato!")
+                                        st.session_state.radar_risultati = None 
+                                        st.session_state.radar_scarti = None
+                                        time.sleep(2)
+                                        st.rerun()
                                 except Exception as e:
-                                    st.error(f"Errore nel salvataggio: Assicurati che il foglio POTENZIALI sia vuoto o abbia la prima riga compilata. Errore tecnico: {e}")
+                                    st.error(f"⚠️ Errore tecnico durante il salvataggio: {e}")
