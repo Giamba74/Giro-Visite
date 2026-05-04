@@ -127,7 +127,6 @@ if ws:
     data = ws.get_all_values()
     df = pd.DataFrame(data[1:], columns=[h.strip().upper() for h in data[0]])
     
-    # 🎯 Mappatura Colonne Intelligente
     c_nom = next(c for c in df.columns if "CLIENTE" in c)
     c_ind = next(c for c in df.columns if "INDIRIZZO" in c or "VIA" in c)
     c_com = next(c for c in df.columns if "COMUNE" in c)
@@ -140,7 +139,6 @@ if ws:
     c_tel = next((c for c in df.columns if "TELEFONO" in c or "CELL" in c or "TEL" in c), None)
     c_piva = next((c for c in df.columns if "P.IVA" in c or "PIVA" in c), None)
     
-    # Mappatura super-potenziata per CODICE e POS
     c_codice = next((c for c in df.columns if "CODICE" in c.upper() or "COD " in c.upper() or "COD." in c.upper() or c.upper() == "COD"), None)
     c_pos = next((c for c in df.columns if "POS" in c.upper() or "DB_POS" in c.upper() or "DB" in c.upper()), None)
     
@@ -152,11 +150,10 @@ if ws:
     if 'master_route' not in st.session_state and ws_mem:
         st.session_state.master_route = carica_giro_da_foglio(ws_mem)
         
-    # Carica la memoria delle spunte passate
     if 'db_tasks' not in st.session_state and ws_mem: 
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
-    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.30</div>", unsafe_allow_html=True)
+    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.31</div>", unsafe_allow_html=True)
     tab1, tab2 = st.tabs(["🚗 GIRO VISITE & NUOVI", "🛰️ RADAR 150m & TELEMACO"])
 
     # ==========================================
@@ -165,7 +162,7 @@ if ws:
     with tab1:
         st.sidebar.markdown("### 🗺️ Opzioni Giro")
         indirizzo_start = st.sidebar.text_input("📍 Partenza:", value="Chianti, Sede")
-        num_visite = st.sidebar.slider("🚗 Clienti DB:", 1, 20, 5)
+        num_visite = st.sidebar.slider("🚗 Clienti DB:", 1, 30, 8)
         only_premium = st.sidebar.toggle("💎 Solo PREMIUM", value=True)
         sel_zona_giro = st.sidebar.multiselect("🌍 Filtra Comune:", sorted([str(c) for c in df[c_com].unique() if str(c).strip()]))
         
@@ -185,7 +182,10 @@ if ws:
                 if sel_cap_giro: mask &= df[c_cap].isin(sel_cap_giro)
                 if only_premium and c_prem: mask &= df[c_prem].astype(str).str.upper().str.contains('SI', na=False)
                 
-                pool = df[mask].head(num_visite).to_dict('records')
+                # 🛡️ SCUDO ANTI-CLONI: Rimuovo i duplicati esatti dal dataframe prima di creare il pool
+                df_pulito = df[mask].drop_duplicates(subset=[c_nom])
+                pool = df_pulito.head(num_visite).to_dict('records')
+                
                 for p in pool: p['is_potenziale'] = False
                 
                 if include_potenziali and ws_pot:
@@ -219,7 +219,6 @@ if ws:
                 for p in pool:
                     p['arr'] = curr_t
                     
-                    # Recupero sicuro delle spunte passate
                     if not p['is_potenziale']:
                         p['tasks_completed'] = copy.deepcopy(st.session_state.db_tasks.get(p[c_nom], []))
                     else:
@@ -270,13 +269,19 @@ if ws:
                     
                     tasks_done = p.get('tasks_completed', [])
                     if c_att and p.get(c_att):
-                        t_list = [t.strip() for t in str(p[c_att]).split(',') if t.strip() and t.lower() != 'nan']
+                        # 🛡️ SCUDO ANTI-CLONI SULLE ATTIVITÀ: Elimino i duplicati dalla lista delle cose da fare (es. "CG, CD, CG" diventa "CG, CD")
+                        raw_tasks = [t.strip() for t in str(p[c_att]).split(',') if t.strip() and t.lower() != 'nan']
+                        t_list = list(dict.fromkeys(raw_tasks))
+                        
                         if t_list:
                             st.markdown("**📝 Attività:**")
-                            for task in t_list:
-                                # LA CHIAVE SICURA: Lega la spunta al NOME del cliente, non alla posizione "i"
-                                safe_client_name = re.sub(r'[^a-zA-Z0-9]', '', p[c_nom])
-                                is_chk = st.checkbox(task, value=(task in tasks_done), key=f"chk_{safe_client_name}_{task}")
+                            for t_idx, task in enumerate(t_list):
+                                safe_client_name = re.sub(r'[^a-zA-Z0-9]', '', str(p[c_nom]))
+                                safe_task = re.sub(r'[^a-zA-Z0-9]', '', task)
+                                # Chiave inscalfibile per Streamlit
+                                key_name = f"chk_{safe_client_name}_{safe_task}_{t_idx}"
+                                
+                                is_chk = st.checkbox(task, value=(task in tasks_done), key=key_name)
                                 if is_chk and task not in tasks_done: tasks_done.append(task)
                                 elif not is_chk and task in tasks_done: tasks_done.remove(task)
                             p['tasks_completed'] = tasks_done
@@ -318,7 +323,6 @@ if ws:
                             if not pronto:
                                 st.warning("Per i clienti a DB devi spuntare 'CG' per concludere la visita!")
                             else:
-                                # SALVATAGGIO STORICO ATTIVITÀ
                                 st.session_state.db_tasks[p[c_nom]] = p['tasks_completed']
                                 if ws_mem: aggiorna_attivita_cliente(ws_mem, p[c_nom], p['tasks_completed'])
                                 
