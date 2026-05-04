@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from geopy.distance import geodesic
-from geopy.geocoders import Nominatim
 from datetime import datetime, timedelta
 import gspread
 from google.oauth2.service_account import Credentials
@@ -11,6 +10,7 @@ import json
 import copy
 import time
 import re
+import requests
 import io
 
 # --- CONFIGURAZIONE ---
@@ -80,13 +80,17 @@ def carica_giro_da_foglio(sh_memoria):
     except: return None
     return None
 
+# 🚀 IL NUOVO MOTORE MAPPE ARCGIS (Infallibile)
 def get_geo_data(query_list):
-    geolocator = Nominatim(user_agent=f"brightstar_v525_{int(time.time())}")
-    time.sleep(1.2)
+    time.sleep(0.5) # Pausa più breve perché ArcGIS è più veloce
     for q in query_list:
         try:
-            location = geolocator.geocode(q, timeout=8)
-            if location: return (location.latitude, location.longitude)
+            url = f"https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?singleLine={requests.utils.quote(q)}&f=json&maxLocations=1"
+            risposta = requests.get(url, timeout=8).json()
+            if risposta.get('candidates') and len(risposta['candidates']) > 0:
+                lat = risposta['candidates'][0]['location']['y']
+                lon = risposta['candidates'][0]['location']['x']
+                return (lat, lon)
         except: continue
     return None
 
@@ -118,7 +122,7 @@ if ws:
     if 'master_route' not in st.session_state and ws_mem:
         st.session_state.master_route = carica_giro_da_foglio(ws_mem)
 
-    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.25</div>", unsafe_allow_html=True)
+    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.26</div>", unsafe_allow_html=True)
     tab1, tab2 = st.tabs(["🚗 GIRO VISITE", "🛰️ RADAR 150m & TELEMACO"])
 
     with tab1:
@@ -192,7 +196,10 @@ if ws:
             for _, r_pre in df_tel.head(3).iterrows():
                 val_i = str(r_pre.get(col_ind_tel, '')).strip()
                 if "Indirizzo" in val_i or val_i in ["", "nan"]:
-                    try: val_i = f"{r_pre.iloc[7]} {r_pre.iloc[8]}, {r_pre.iloc[13]}"
+                    try:
+                        via_p = str(r_pre.iloc[7]).replace('nan', '').strip()
+                        civ_p = str(r_pre.iloc[8]).replace('nan', '').strip()
+                        val_i = f"{via_p} {civ_p}".strip()
                     except: val_i = "ERRORE"
                 st.write(f"🔹 {r_pre[col_nome_tel]} -> **{val_i}**")
 
@@ -208,7 +215,6 @@ if ws:
                 sel_comuni_radar = comuni_miei_puliti
 
             if st.button("🚀 AVVIA RADAR 150m", type="primary", use_container_width=True):
-                # 1. Filtro Premium Corretto
                 df_prem = df[df[c_prem].astype(str).str.upper().str.contains("SI", na=False)].copy() if c_prem else df.head(0)
                 premium_coords = []
                 for _, pr in df_prem.iterrows():
@@ -226,7 +232,6 @@ if ws:
                     com_t_pulito = pulisci_nome(com_t_raw)
                     nome_t_pulito = pulisci_nome(r_tel[col_nome_tel])
                     
-                    # Logica Filtro Zona (Elastica)
                     if modalita_cecchino:
                         if com_t_pulito not in comuni_miei_puliti:
                             scarti["ZONA"] += 1; continue
@@ -237,12 +242,17 @@ if ws:
                     if nome_t_pulito in nomi_miei_puliti:
                         scarti["CLIENTI"] += 1; continue
                     
+                    # Pulizia intelligente dell'indirizzo
                     ind_t = str(r_tel.get(col_ind_tel, '')).strip()
                     if "Indirizzo" in ind_t or ind_t in ["", "nan"]:
-                        try: ind_t = f"{r_tel.iloc[7]} {r_tel.iloc[8]}"
-                        except: ind_t = "Unknown"
+                        try:
+                            via = str(r_tel.iloc[7]).replace('nan', '').strip()
+                            civ = str(r_tel.iloc[8]).replace('nan', '').strip()
+                            ind_t = f"{via} {civ}".strip()
+                        except: ind_t = ""
                     
-                    t_c = get_geo_data([f"{ind_t}, {com_t_raw}, Italy"])
+                    # Ricerca Mappa Avanzata
+                    t_c = get_geo_data([f"{ind_t}, {com_t_raw}, Italy", f"{com_t_raw}, Italy"])
                     if t_c:
                         vicino = any(geodesic(t_c, pc).meters < 150 for pc in premium_coords)
                         if vicino: scarti["RADAR"] += 1
