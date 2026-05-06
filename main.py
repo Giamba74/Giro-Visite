@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from geopy.distance import geodesic
+import math
 from datetime import datetime, timedelta
 import gspread
 from google.oauth2.service_account import Credentials
@@ -30,6 +31,7 @@ st.markdown("""
     .info-tag { background: rgba(255, 255, 255, 0.05); padding: 4px 10px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.1); }
     .badge-potenziale { background: rgba(16, 185, 129, 0.2); color: #34d399; padding: 5px 12px; border-radius: 8px; font-weight: bold; border: 1px solid rgba(16, 185, 129, 0.5);}
     .metric-val { font-size: 1.8rem; font-weight: 800; color: #38bdf8; }
+    .btn-maps { background: linear-gradient(135deg, #10b981, #059669); color: white; text-align:center; padding: 10px; border-radius: 8px; display:block; font-weight:bold; text-decoration:none; margin-bottom:20px;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -86,22 +88,57 @@ def pulisci_coordinata_italy(coord_str, is_lat=True):
         return None
     except: return None
 
+# 🧠 MOTORE MATEMATICO ULTRARAPIDO PER LE DISTANZE
+def euclidean_dist(c1, c2):
+    dy = (c1[0] - c2[0]) * 111320
+    dx = (c1[1] - c2[1]) * 81000
+    return math.sqrt(dx*dx + dy*dy)
+
 def calcola_distanza_pedonale(coord_partenza, coord_arrivo):
     try:
         url = f"http://router.project-osrm.org/route/v1/foot/{coord_partenza[1]},{coord_partenza[0]};{coord_arrivo[1]},{coord_arrivo[0]}?overview=false"
         res = requests.get(url, timeout=3).json()
-        if res.get("code") == "Ok":
-            return res["routes"][0]["distance"]
+        if res.get("code") == "Ok": return res["routes"][0]["distance"]
     except: pass
     return geodesic(coord_partenza, coord_arrivo).meters * 1.30
+
+# 🧠 ALGORITMO DI OTTIMIZZAZIONE 2-OPT (Evita percorsi a zig-zag)
+def optimize_route_2opt(raw_pool, start_coords):
+    if not raw_pool: return []
+    optimized = []
+    current = start_coords
+    unvisited = raw_pool.copy()
+    
+    # Fase 1: Vicino più prossimo
+    while unvisited:
+        next_node = min(unvisited, key=lambda x: euclidean_dist(current, x['coords']))
+        optimized.append(next_node)
+        current = next_node['coords']
+        unvisited.remove(next_node)
+        
+    # Fase 2: 2-Opt (Sbroglia gli incroci)
+    improvement = True
+    while improvement:
+        improvement = False
+        for i in range(len(optimized) - 1):
+            for j in range(i + 2, len(optimized)):
+                node_i = start_coords if i == 0 else optimized[i-1]['coords']
+                d1 = euclidean_dist(node_i, optimized[i]['coords'])
+                d2 = euclidean_dist(optimized[j-1]['coords'], optimized[j]['coords'])
+                d3 = euclidean_dist(node_i, optimized[j-1]['coords'])
+                d4 = euclidean_dist(optimized[i]['coords'], optimized[j]['coords'])
+                
+                if d3 + d4 < d1 + d2:
+                    optimized[i:j] = reversed(optimized[i:j])
+                    improvement = True
+    return optimized
 
 def salva_giro_memoria(ws_mem, rotta):
     if not ws_mem: return
     try:
         rotta_copy = copy.deepcopy(rotta)
         for p in rotta_copy:
-            if isinstance(p.get('arr'), datetime):
-                p['arr'] = p['arr'].strftime("%Y-%m-%d %H:%M:%S")
+            if isinstance(p.get('arr'), datetime): p['arr'] = p['arr'].strftime("%Y-%m-%d %H:%M:%S")
         ws_mem.update_acell("B2", json.dumps(rotta_copy))
     except: pass
 
@@ -120,16 +157,25 @@ def carica_giro_da_foglio(sh_memoria):
     except: return None
     return None
 
+# 🛰️ DOPPIO MOTORE SATELLITARE (ArcGis + OpenStreetMap)
 def get_geo_data(query_list):
-    time.sleep(0.4) 
+    time.sleep(0.3) 
+    # Motore 1: ArcGis
     for q in query_list:
         try:
             url = f"https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?singleLine={requests.utils.quote(q)}&f=json&maxLocations=1"
-            risposta = requests.get(url, timeout=8).json()
-            if risposta.get('candidates') and len(risposta['candidates']) > 0:
-                lat = risposta['candidates'][0]['location']['y']
-                lon = risposta['candidates'][0]['location']['x']
-                return (lat, lon)
+            res = requests.get(url, timeout=4).json()
+            if res.get('candidates'):
+                loc = res['candidates'][0]['location']
+                return (loc['y'], loc['x'])
+        except: continue
+        
+    # Motore 2: Nominatim OSM (Efficacissimo sui Bar e civici in Italia)
+    for q in query_list:
+        try:
+            url = f"https://nominatim.openstreetmap.org/search?q={requests.utils.quote(q)}&format=json&limit=1"
+            res = requests.get(url, headers={'User-Agent': 'BrightstarApp/1.0'}, timeout=4).json()
+            if res: return (float(res[0]['lat']), float(res[0]['lon']))
         except: continue
     return None
 
@@ -176,12 +222,15 @@ if ws:
     if 'db_tasks' not in st.session_state and ws_mem: 
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
-    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.43</div>", unsafe_allow_html=True)
+    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.45</div>", unsafe_allow_html=True)
     tab1, tab2 = st.tabs(["🚗 GIRO VISITE & NUOVI", "🛰️ RADAR 150m & TELEMACO"])
 
     with tab1:
         st.sidebar.markdown("### 🗺️ Opzioni Giro")
-        indirizzo_start = st.sidebar.text_input("📍 Partenza:", value="Chianti, Sede")
+        
+        # 🎯 PARTENZA AUTO-BARICENTRICA
+        indirizzo_start = st.sidebar.text_input("📍 Da dove parti?", value="", help="Es. 'Via Roma 10, Arezzo'. Se lasci vuoto, l'App calcola il centro esatto della zona e parte da lì!")
+        
         num_visite = st.sidebar.slider("🚗 Clienti DB:", 1, 30, 8)
         only_premium = st.sidebar.toggle("💎 Solo PREMIUM", value=True)
         sel_zona_giro = st.sidebar.multiselect("🌍 Filtra Comune:", sorted([str(c).strip() for c in df[c_com].unique() if str(c).strip()]))
@@ -196,7 +245,7 @@ if ws:
         num_potenziali = st.sidebar.slider("🆕 Potenziali da inserire:", 0, 5, 1)
 
         if st.button("🔄 CALCOLA NUOVO GIRO OTTIMIZZATO", type="primary", use_container_width=True):
-            with st.spinner("IA sta ottimizzando la rotta per minimizzare i tempi..."):
+            with st.spinner("L'Intelligenza Artificiale sta stirando il percorso (Algoritmo 2-Opt)..."):
                 sel_zona_clean = [c.strip().upper() for c in sel_zona_giro]
                 sel_cap_clean = [c.strip() for c in sel_cap_giro]
 
@@ -212,7 +261,6 @@ if ws:
                 raw_pool = df_pulito.head(num_visite).to_dict('records')
                 for p in raw_pool: p['is_potenziale'] = False
                 
-                # Aggiunta potenziali alla lista grezza
                 if num_potenziali > 0 and ws_pot:
                     try:
                         pot_data = ws_pot.get_all_values()
@@ -243,41 +291,61 @@ if ws:
                                             if len([x for x in raw_pool if x['is_potenziale']]) >= num_potenziali: break
                     except: pass
 
-                # --- 🧠 ALGORITMO DI OTTIMIZZAZIONE (NEAREST NEIGHBOR) ---
-                start_coords = get_geo_data([indirizzo_start, "Firenze, Italy"]) or SEDE_COORDS
-                
-                # 1. Geocodifica tutti i punti selezionati
-                for p in raw_pool:
-                    if not p['is_potenziale']:
-                        la, lo = pulisci_coordinata_italy(p.get(c_lat), True), pulisci_coordinata_italy(p.get(c_lon), False)
-                        p['coords'] = (la, lo) if la and lo else get_geo_data([f"{p[c_ind]}, {p[c_com]}, Italy"]) or SEDE_COORDS
-                    else:
-                        p['coords'] = get_geo_data([f"{p[c_ind]}, {p[c_com]}, Italy"]) or SEDE_COORDS
-                
-                # 2. Ordina per vicinanza progressiva
-                rotta_ottimizzata = []
-                punto_attuale = start_coords
-                rimanenti = raw_pool.copy()
-                
-                while rimanenti:
-                    prossimo = min(rimanenti, key=lambda x: geodesic(punto_attuale, x['coords']).meters)
-                    rotta_ottimizzata.append(prossimo)
-                    punto_attuale = prossimo['coords']
-                    rimanenti.remove(prossimo)
-                
-                # 3. Assegna orari
-                curr_t = datetime.now(TZ_ITALY).replace(hour=9, minute=0)
-                for p in rotta_ottimizzata:
-                    p['arr'] = curr_t
-                    p['tasks_completed'] = copy.deepcopy(st.session_state.db_tasks.get(p[c_nom], [])) if not p['is_potenziale'] else []
-                    curr_t += timedelta(minutes=40)
-                
-                st.session_state.master_route = rotta_ottimizzata
-                salva_giro_memoria(ws_mem, rotta_ottimizzata)
-                st.rerun()
+                if not raw_pool:
+                    st.warning("⚠️ Nessun cliente trovato con questi filtri.")
+                else:
+                    # 1. Geocodifica potenziata
+                    for p in raw_pool:
+                        if not p['is_potenziale']:
+                            la, lo = pulisci_coordinata_italy(p.get(c_lat), True), pulisci_coordinata_italy(p.get(c_lon), False)
+                            p['coords'] = (la, lo) if la and lo else get_geo_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_com]}, Italy"])
+                        else:
+                            p['coords'] = get_geo_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_com]}, Italy"])
+                            
+                        # Mettiamo un alert in console se fallisce
+                        if not p['coords']: p['coords'] = SEDE_COORDS 
+                    
+                    # 🎯 2. PARTENZA A CENTRO DI GRAVITÀ
+                    if indirizzo_start.strip():
+                        start_coords = get_geo_data([indirizzo_start, f"{indirizzo_start}, Italy"])
+                        if not start_coords: 
+                            st.toast("⚠️ Indirizzo di partenza non trovato. Parto dal centro della zona.", icon="🗺️")
+                            start_coords = None
+                    else: start_coords = None
+
+                    if not start_coords:
+                        # Calcolo Baricentro esatto della giornata
+                        avg_lat = sum(p['coords'][0] for p in raw_pool) / len(raw_pool)
+                        avg_lon = sum(p['coords'][1] for p in raw_pool) / len(raw_pool)
+                        centroid = (avg_lat, avg_lon)
+                        # Parto dal cliente più vicino al centroide
+                        start_coords = min(raw_pool, key=lambda x: euclidean_dist(centroid, x['coords']))['coords']
+
+                    # 3. Applicazione Algoritmo TSP 2-Opt
+                    rotta_ottimizzata = optimize_route_2opt(raw_pool, start_coords)
+                    
+                    # 4. Assegna orari
+                    curr_t = datetime.now(TZ_ITALY).replace(hour=9, minute=0)
+                    for p in rotta_ottimizzata:
+                        p['arr'] = curr_t
+                        p['tasks_completed'] = copy.deepcopy(st.session_state.db_tasks.get(p[c_nom], [])) if not p['is_potenziale'] else []
+                        curr_t += timedelta(minutes=40)
+                    
+                    st.session_state.start_coords_route = start_coords
+                    st.session_state.master_route = rotta_ottimizzata
+                    salva_giro_memoria(ws_mem, rotta_ottimizzata)
+                    st.rerun()
 
         # VISUALIZZAZIONE
         if st.session_state.get('master_route'):
+            
+            # 🗺️ PULSANTE GOOGLE MAPS MULTIPLO
+            if st.session_state.get('start_coords_route'):
+                maps_url = f"https://www.google.com/maps/dir/{st.session_state.start_coords_route[0]},{st.session_state.start_coords_route[1]}"
+                # Google Maps accetta max 9-10 tappe via URL. Prendiamo le prime 9.
+                for t_p in st.session_state.master_route[:9]: maps_url += f"/{t_p['coords'][0]},{t_p['coords'][1]}"
+                st.markdown(f"<a href='{maps_url}' target='_blank' class='btn-maps'>🗺️ APRI INTERO GIRO SU GOOGLE MAPS</a>", unsafe_allow_html=True)
+
             for i, p in enumerate(st.session_state.master_route):
                 is_pot = p.get('is_potenziale', False)
                 badge_html = "<span class='badge-potenziale'>🆕 POTENZIALE</span>" if is_pot else ("<span class='badge prem-badge'>💎 PREMIUM</span>" if c_prem and p.get(c_prem) == 'SI' else "")
@@ -311,7 +379,9 @@ if ws:
                             p['tasks_completed'] = tasks_done
                             if any("CG" in t.upper() for t in t_list): pronto = any("CG" in t.upper() for t in tasks_done)
                 
-                st.markdown(f"<div style='color:#94a3b8; font-weight:500; margin-bottom: 15px;'>📍 {p.get(c_ind, '')}, {p.get(c_com, '')}</div>", unsafe_allow_html=True)
+                # Segnalino se coord fallite (mappa a Chianti)
+                coord_alert = " ⚠️ (Precisione Mappa Ridotta)" if p.get('coords') == SEDE_COORDS and c_com not in "Chianti" else ""
+                st.markdown(f"<div style='color:#94a3b8; font-weight:500; margin-bottom: 15px;'>📍 {p.get(c_ind, '')}, {p.get(c_com, '')}{coord_alert}</div>", unsafe_allow_html=True)
                 
                 esito_sel = ""
                 if is_pot:
@@ -323,7 +393,7 @@ if ws:
                 
                 c_dest = p.get('coords', SEDE_COORDS)
                 c1, c2, c3 = st.columns([1, 1, 2])
-                with c1: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={c_dest[0]},{c_dest[1]}", use_container_width=True)
+                with c1: st.link_button("🚙 NAVIGA PUNTO", f"https://www.google.com/maps/dir/?api=1&destination={c_dest[0]},{c_dest[1]}", use_container_width=True)
                 if not is_pot:
                     with c2: 
                         if tel: st.link_button("📞 CHIAMA", f"tel:{tel}", use_container_width=True)
