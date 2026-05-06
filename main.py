@@ -13,9 +13,45 @@ import time
 import re
 import requests
 
-# --- CONFIGURAZIONE ---
-st.set_page_config(page_title="Brightstar CRM PRO", page_icon="💎", layout="wide")
+# --- CONFIGURAZIONE E SICUREZZA ---
+st.set_page_config(page_title="Brightstar CRM PRO", page_icon="🔒", layout="wide")
 TZ_ITALY = pytz.timezone('Europe/Rome')
+
+# ==============================================================================
+# 🔒 SCHERMATA DI SICUREZZA E ID FOGLIO
+# ==============================================================================
+PIN_SEGRETO = "Takira74,1974"  # <--- CAMBIA QUESTO NUMERO O PAROLA COME PREFERISCI!
+ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" # <--- INSERISCI IL TUO ID GOOGLE SHEETS
+# ==============================================================================
+
+# --- SISTEMA DI BLOCCO ACCESSI ---
+if "autenticato" not in st.session_state:
+    st.session_state.autenticato = False
+
+if not st.session_state.autenticato:
+    st.markdown("""
+        <style>
+        .stApp { background: radial-gradient(circle at center, #0f172a 0%, #000000 100%); color: #f1f5f9; font-family: 'Inter', sans-serif;}
+        .login-box { max-width: 400px; margin: 100px auto; background: #1e293b; padding: 40px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); text-align: center; border: 1px solid #334155;}
+        </style>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("<div class='login-box'>", unsafe_allow_html=True)
+    st.markdown("<h1 style='font-size: 3rem; margin-bottom: 0;'>🛡️</h1>", unsafe_allow_html=True)
+    st.markdown("<h2>ACCESSO RISERVATO</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #94a3b8; margin-bottom: 20px;'>Brightstar CRM PRO - Inserisci il codice di sicurezza.</p>", unsafe_allow_html=True)
+    
+    pin_inserito = st.text_input("PIN:", type="password", placeholder="••••")
+    
+    if st.button("🔓 SBLOCCA SISTEMA", type="primary", use_container_width=True):
+        if pin_inserito == PIN_SEGRETO:
+            st.session_state.autenticato = True
+            st.rerun()
+        else:
+            st.error("❌ Codice errato. Accesso negato.")
+            
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.stop() # 🛑 BLOCCO TOTALE: Il resto del codice non viene letto se il PIN è sbagliato!
 
 # --- 🎨 DESIGN E STILE CSS ---
 st.markdown("""
@@ -38,11 +74,6 @@ st.markdown("""
 COORDS = { "Chianti": (43.661888, 11.305728), "Firenze": (43.7696, 11.2558), "Arezzo": (43.4631, 11.8781) }
 SEDE_COORDS = COORDS["Chianti"]
 
-# ==============================================================================
-# 👇 MODIFICA SOLO QUI SOTTO CON IL TUO VERO ID FOGLIO GOOGLE 👇
-ID_DEL_FOGLIO = "1E9Fv9xOvGGumWGB7MjhAMbV5yzOqPtS1YRx-y4dypQ0" 
-# ==============================================================================
-
 @st.cache_resource
 def connect_db():
     try:
@@ -54,8 +85,16 @@ def connect_db():
         titoli_fogli = {w.title.strip().upper(): w for w in sh.worksheets()}
         ws_mem = titoli_fogli.get("MEMORIA_GIRO")
         ws_pot = titoli_fogli.get("POTENZIALI")
-        return ws_main, ws_mem, ws_pot
-    except: return None, None, None
+        
+        ws_log = titoli_fogli.get("LOG_VISITE")
+        if not ws_log:
+            try:
+                ws_log = sh.add_worksheet(title="LOG_VISITE", rows=1000, cols=5)
+                ws_log.update("A1:D1", [["DATA", "CLIENTE", "TIPO", "ATTIVITA"]])
+            except: pass
+            
+        return ws_main, ws_mem, ws_pot, ws_log
+    except: return None, None, None, None
 
 def carica_storico_attivita(sh_memoria):
     try:
@@ -88,7 +127,6 @@ def pulisci_coordinata_italy(coord_str, is_lat=True):
         return None
     except: return None
 
-# 🧠 MOTORE MATEMATICO ULTRARAPIDO PER LE DISTANZE
 def euclidean_dist(c1, c2):
     dy = (c1[0] - c2[0]) * 111320
     dx = (c1[1] - c2[1]) * 81000
@@ -102,21 +140,18 @@ def calcola_distanza_pedonale(coord_partenza, coord_arrivo):
     except: pass
     return geodesic(coord_partenza, coord_arrivo).meters * 1.30
 
-# 🧠 ALGORITMO DI OTTIMIZZAZIONE 2-OPT (Evita percorsi a zig-zag)
 def optimize_route_2opt(raw_pool, start_coords):
     if not raw_pool: return []
     optimized = []
     current = start_coords
     unvisited = raw_pool.copy()
     
-    # Fase 1: Vicino più prossimo
     while unvisited:
         next_node = min(unvisited, key=lambda x: euclidean_dist(current, x['coords']))
         optimized.append(next_node)
         current = next_node['coords']
         unvisited.remove(next_node)
         
-    # Fase 2: 2-Opt (Sbroglia gli incroci)
     improvement = True
     while improvement:
         improvement = False
@@ -157,10 +192,8 @@ def carica_giro_da_foglio(sh_memoria):
     except: return None
     return None
 
-# 🛰️ DOPPIO MOTORE SATELLITARE (ArcGis + OpenStreetMap)
 def get_geo_data(query_list):
     time.sleep(0.3) 
-    # Motore 1: ArcGis
     for q in query_list:
         try:
             url = f"https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?singleLine={requests.utils.quote(q)}&f=json&maxLocations=1"
@@ -169,8 +202,6 @@ def get_geo_data(query_list):
                 loc = res['candidates'][0]['location']
                 return (loc['y'], loc['x'])
         except: continue
-        
-    # Motore 2: Nominatim OSM (Efficacissimo sui Bar e civici in Italia)
     for q in query_list:
         try:
             url = f"https://nominatim.openstreetmap.org/search?q={requests.utils.quote(q)}&format=json&limit=1"
@@ -189,7 +220,7 @@ def agente_strategico(note):
     return f"ℹ️ MEMO: {note[:50]}...", "border-left-color: #3b82f6;"
 
 # --- AVVIO APP ---
-ws, ws_mem, ws_pot = connect_db()
+ws, ws_mem, ws_pot, ws_log = connect_db()
 
 if 'radar_risultati' not in st.session_state: st.session_state.radar_risultati = None
 if 'radar_scarti' not in st.session_state: st.session_state.radar_scarti = None
@@ -222,15 +253,12 @@ if ws:
     if 'db_tasks' not in st.session_state and ws_mem: 
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
-    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.45</div>", unsafe_allow_html=True)
+    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.47</div>", unsafe_allow_html=True)
     tab1, tab2 = st.tabs(["🚗 GIRO VISITE & NUOVI", "🛰️ RADAR 150m & TELEMACO"])
 
     with tab1:
         st.sidebar.markdown("### 🗺️ Opzioni Giro")
-        
-        # 🎯 PARTENZA AUTO-BARICENTRICA
         indirizzo_start = st.sidebar.text_input("📍 Da dove parti?", value="", help="Es. 'Via Roma 10, Arezzo'. Se lasci vuoto, l'App calcola il centro esatto della zona e parte da lì!")
-        
         num_visite = st.sidebar.slider("🚗 Clienti DB:", 1, 30, 8)
         only_premium = st.sidebar.toggle("💎 Solo PREMIUM", value=True)
         sel_zona_giro = st.sidebar.multiselect("🌍 Filtra Comune:", sorted([str(c).strip() for c in df[c_com].unique() if str(c).strip()]))
@@ -294,37 +322,28 @@ if ws:
                 if not raw_pool:
                     st.warning("⚠️ Nessun cliente trovato con questi filtri.")
                 else:
-                    # 1. Geocodifica potenziata
                     for p in raw_pool:
                         if not p['is_potenziale']:
                             la, lo = pulisci_coordinata_italy(p.get(c_lat), True), pulisci_coordinata_italy(p.get(c_lon), False)
                             p['coords'] = (la, lo) if la and lo else get_geo_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_com]}, Italy"])
                         else:
                             p['coords'] = get_geo_data([f"{p[c_ind]}, {p[c_com]}, Italy", f"{p[c_com]}, Italy"])
-                            
-                        # Mettiamo un alert in console se fallisce
                         if not p['coords']: p['coords'] = SEDE_COORDS 
                     
-                    # 🎯 2. PARTENZA A CENTRO DI GRAVITÀ
                     if indirizzo_start.strip():
                         start_coords = get_geo_data([indirizzo_start, f"{indirizzo_start}, Italy"])
                         if not start_coords: 
-                            st.toast("⚠️ Indirizzo di partenza non trovato. Parto dal centro della zona.", icon="🗺️")
+                            st.toast("⚠️ Indirizzo non trovato. Parto dal centro della zona.", icon="🗺️")
                             start_coords = None
                     else: start_coords = None
 
                     if not start_coords:
-                        # Calcolo Baricentro esatto della giornata
                         avg_lat = sum(p['coords'][0] for p in raw_pool) / len(raw_pool)
                         avg_lon = sum(p['coords'][1] for p in raw_pool) / len(raw_pool)
-                        centroid = (avg_lat, avg_lon)
-                        # Parto dal cliente più vicino al centroide
-                        start_coords = min(raw_pool, key=lambda x: euclidean_dist(centroid, x['coords']))['coords']
+                        start_coords = min(raw_pool, key=lambda x: euclidean_dist((avg_lat, avg_lon), x['coords']))['coords']
 
-                    # 3. Applicazione Algoritmo TSP 2-Opt
                     rotta_ottimizzata = optimize_route_2opt(raw_pool, start_coords)
                     
-                    # 4. Assegna orari
                     curr_t = datetime.now(TZ_ITALY).replace(hour=9, minute=0)
                     for p in rotta_ottimizzata:
                         p['arr'] = curr_t
@@ -336,13 +355,9 @@ if ws:
                     salva_giro_memoria(ws_mem, rotta_ottimizzata)
                     st.rerun()
 
-        # VISUALIZZAZIONE
         if st.session_state.get('master_route'):
-            
-            # 🗺️ PULSANTE GOOGLE MAPS MULTIPLO
             if st.session_state.get('start_coords_route'):
                 maps_url = f"https://www.google.com/maps/dir/{st.session_state.start_coords_route[0]},{st.session_state.start_coords_route[1]}"
-                # Google Maps accetta max 9-10 tappe via URL. Prendiamo le prime 9.
                 for t_p in st.session_state.master_route[:9]: maps_url += f"/{t_p['coords'][0]},{t_p['coords'][1]}"
                 st.markdown(f"<a href='{maps_url}' target='_blank' class='btn-maps'>🗺️ APRI INTERO GIRO SU GOOGLE MAPS</a>", unsafe_allow_html=True)
 
@@ -379,7 +394,6 @@ if ws:
                             p['tasks_completed'] = tasks_done
                             if any("CG" in t.upper() for t in t_list): pronto = any("CG" in t.upper() for t in tasks_done)
                 
-                # Segnalino se coord fallite (mappa a Chianti)
                 coord_alert = " ⚠️ (Precisione Mappa Ridotta)" if p.get('coords') == SEDE_COORDS and c_com not in "Chianti" else ""
                 st.markdown(f"<div style='color:#94a3b8; font-weight:500; margin-bottom: 15px;'>📍 {p.get(c_ind, '')}, {p.get(c_com, '')}{coord_alert}</div>", unsafe_allow_html=True)
                 
@@ -402,6 +416,15 @@ if ws:
                         if st.button("✅ CONCLUDI", key=f"bc_{i}", use_container_width=True, type="primary" if pronto else "secondary"):
                             if not pronto: st.warning("Spunta 'CG'!")
                             else:
+                                vecchi_tasks = st.session_state.db_tasks.get(p[c_nom], [])
+                                nuovi_tasks = [t for t in p['tasks_completed'] if t not in vecchi_tasks]
+                                if ws_log:
+                                    try:
+                                        oggi_str = datetime.now(TZ_ITALY).strftime("%d/%m/%Y")
+                                        str_task = ", ".join(nuovi_tasks) if nuovi_tasks else "Solo Visita"
+                                        ws_log.append_row([oggi_str, p[c_nom], "CLIENTE DB", str_task])
+                                    except: pass
+                                
                                 st.session_state.db_tasks[p[c_nom]] = p['tasks_completed']
                                 if ws_mem: aggiorna_attivita_cliente(ws_mem, p[c_nom], p['tasks_completed'])
                                 try:
@@ -416,6 +439,12 @@ if ws:
                         if st.button("✅ SALVA POT.", key=f"bc_{i}", use_container_width=True, type="primary" if pronto else "secondary"):
                             if not pronto: st.warning("Imposta esito conclusivo!")
                             else:
+                                if ws_log:
+                                    try:
+                                        oggi_str = datetime.now(TZ_ITALY).strftime("%d/%m/%Y")
+                                        ws_log.append_row([oggi_str, p[c_nom], "POTENZIALE", esito_sel])
+                                    except: pass
+
                                 if ws_pot:
                                     try: ws_pot.update_cell(p['row_idx'], p['idx_stato']+2, datetime.now(TZ_ITALY).strftime("%d/%m/%Y"))
                                     except: pass
@@ -424,25 +453,61 @@ if ws:
                                 st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            # INNESTO DINAMICO
             st.divider()
             with st.expander("➕ AGGIUNGI CLIENTE AL VOLO"):
                 nomi_nel_giro = [p[c_nom] for p in st.session_state.master_route]
                 clienti_cg_completati = [n for n, t in st.session_state.db_tasks.items() if any("CG" in str(x).upper() for x in t)]
                 disponibili = sorted(df[~df[c_nom].isin(nomi_nel_giro) & ~df[c_nom].isin(clienti_cg_completati)][c_nom].dropna().unique().tolist())
-                scelto = st.selectbox("Seleziona:", [""] + disponibili)
+                
+                potenziali_disponibili = []
+                if ws_pot:
+                    try:
+                        pot_data = ws_pot.get_all_values()
+                        if len(pot_data) > 1:
+                            for r_idx, row in enumerate(pot_data[1:]):
+                                idx_stato = next((i for i, cell in enumerate(row) if "✅" in str(cell).upper() or "DISPONIBILE" in str(cell).upper()), -1)
+                                if idx_stato >= 3:
+                                    data_visita = str(row[idx_stato + 1]).strip() if len(row) > idx_stato + 1 else ""
+                                    if not data_visita:
+                                        nome_pot = str(row[idx_stato - 3]).strip()
+                                        if nome_pot and nome_pot not in nomi_nel_giro:
+                                            comune_pot = str(row[idx_stato - 1]).strip().title()
+                                            potenziali_disponibili.append(f"🆕 {nome_pot} ({comune_pot}) [POTENZIALE]")
+                    except: pass
+                
+                tutti_disponibili = [""] + potenziali_disponibili + clienti_disponibili
+                scelto = st.selectbox("Seleziona:", tutti_disponibili)
+                
                 if st.button("⚡ INSERISCI", type="primary") and scelto:
-                    p_new = df[df[c_nom] == scelto].iloc[0].to_dict()
-                    p_new['is_potenziale'] = False
-                    p_new['tasks_completed'] = copy.deepcopy(st.session_state.db_tasks.get(scelto, []))
-                    p_new['arr'] = (st.session_state.master_route[-1]['arr'] + timedelta(minutes=40)) if st.session_state.master_route else datetime.now(TZ_ITALY)
-                    la, lo = pulisci_coordinata_italy(p_new.get(c_lat), True), pulisci_coordinata_italy(p_new.get(c_lon), False)
-                    p_new['coords'] = (la, lo) if la and lo else get_geo_data([f"{p_new[c_ind]}, {p_new[c_com]}, Italy"]) or SEDE_COORDS
-                    st.session_state.master_route.append(p_new)
-                    salva_giro_memoria(ws_mem, st.session_state.master_route)
-                    st.rerun()
+                    p_new = {}
+                    is_pot_selezionato = "🆕 " in scelto and "[POTENZIALE]" in scelto
+                    
+                    if is_pot_selezionato:
+                        clean_name = scelto.split(" (")[0].replace("🆕 ", "").strip()
+                        pot_data = ws_pot.get_all_values()
+                        for r_idx, row in enumerate(pot_data[1:]):
+                            idx_stato = next((i for i, cell in enumerate(row) if "✅" in str(cell).upper() or "DISPONIBILE" in str(cell).upper()), -1)
+                            if idx_stato >= 3:
+                                if str(row[idx_stato - 3]).strip() == clean_name:
+                                    p_new = {
+                                        c_nom: clean_name, c_ind: str(row[idx_stato - 2]).strip(), c_com: str(row[idx_stato - 1]).strip().upper(),
+                                        "is_potenziale": True, "PIVA": str(row[idx_stato + 4]).strip() if len(row) > idx_stato + 4 else "",
+                                        "row_idx": r_idx + 2, "idx_stato": idx_stato
+                                    }
+                                    break
+                    else:
+                        p_new = df[df[c_nom] == scelto].iloc[0].to_dict()
+                        p_new['is_potenziale'] = False
+                    
+                    if p_new:
+                        p_new['tasks_completed'] = copy.deepcopy(st.session_state.db_tasks.get(p_new[c_nom], [])) if not p_new.get('is_potenziale') else []
+                        p_new['arr'] = (st.session_state.master_route[-1]['arr'] + timedelta(minutes=40)) if st.session_state.master_route else datetime.now(TZ_ITALY)
+                        la, lo = pulisci_coordinata_italy(p_new.get(c_lat), True), pulisci_coordinata_italy(p_new.get(c_lon), False)
+                        p_new['coords'] = (la, lo) if la and lo else get_geo_data([f"{p_new[c_ind]}, {p_new[c_com]}, Italy"]) or SEDE_COORDS
+                        st.session_state.master_route.append(p_new)
+                        salva_giro_memoria(ws_mem, st.session_state.master_route)
+                        st.rerun()
 
-    # TAB 2: RADAR
     with tab2:
         file_tel = st.file_uploader("📂 Telemaco", type=['xlsx', 'csv'])
         if file_tel:
@@ -453,6 +518,10 @@ if ws:
             with c3: col_c = st.selectbox("Comune:", df_t.columns, index=2)
             with c4: col_cap_t = st.selectbox("CAP:", ["Nessuna"] + list(df_t.columns))
             
+            modalita_cecchino = st.toggle("🎯 MODALITÀ CECCHINO (Filtra solo comuni del database)", value=True)
+            comuni_miei = [pulisci_nome(c) for c in df[c_com].unique() if str(c).strip()]
+            sel_comuni_radar = comuni_miei if modalita_cecchino else st.multiselect("🌍 Comuni da scansionare:", sorted(df_t[col_c].unique()))
+
             if st.button("🚀 AVVIA RADAR 150m (PEDONALE)", type="primary", use_container_width=True):
                 prem_coords = []
                 if c_prem:
@@ -461,13 +530,14 @@ if ws:
                         if la: prem_coords.append((la, lo))
                 
                 results, scarti = [], {"ZONA": 0, "CLIENTI": 0, "RADAR": 0, "MAPPA": 0}
-                nomi_miei = [pulisci_nome(n) for n in df[c_nom].unique()]
-                
                 prog = st.progress(0)
+                
                 for idx, r_t in df_t.iterrows():
                     prog.progress((idx+1)/len(df_t))
                     nome_t = pulisci_nome(r_t[col_n])
-                    if nome_t in nomi_miei: scarti["CLIENTI"] += 1; continue
+                    if nome_t in [pulisci_nome(n) for n in df[c_nom].unique()]: scarti["CLIENTI"] += 1; continue
+                    
+                    if pulisci_nome(r_t[col_c]) not in sel_comuni_radar: scarti["ZONA"] += 1; continue
                     
                     ind_str = str(r_t[col_i]).strip()
                     if col_cap_t != "Nessuna": ind_str += f", {r_t[col_cap_t]}"
@@ -476,15 +546,13 @@ if ws:
                     if t_c:
                         vicino = False
                         for pc in prem_coords:
-                            if geodesic(t_c, pc).meters <= 150:
-                                if calcola_distanza_pedonale(t_c, pc) <= 150:
-                                    vicino = True; break
+                            if geodesic(t_c, pc).meters <= 150 and calcola_distanza_pedonale(t_c, pc) <= 150:
+                                vicino = True; break
                         if vicino: scarti["RADAR"] += 1
                         else: results.append([datetime.now(TZ_ITALY).strftime("%d/%m/%Y"), nome_t, ind_str, r_t[col_c], "✅ DISPONIBILE"])
                     else: scarti["MAPPA"] += 1
                 
-                st.session_state.radar_risultati = results
-                st.session_state.radar_scarti = scarti
+                st.session_state.radar_risultati, st.session_state.radar_scarti = results, scarti
 
             if st.session_state.get('radar_scarti'):
                 s = st.session_state.radar_scarti
@@ -493,6 +561,5 @@ if ws:
                     try:
                         ws_pot.update("A1:I1", [["DATA_INS", "CLIENTE", "INDIRIZZO", "COMUNE", "STATO", "DATA_VISITA", "ESITO", "SCORING", "PIVA"]])
                         ws_pot.append_rows(st.session_state.radar_risultati)
-                        st.success("Salvati!")
-                        st.session_state.radar_risultati = None
-                    except: st.error("Errore!")
+                        st.success("Salvati!"); st.session_state.radar_risultati = None
+                    except: st.error("Errore di salvataggio!")
