@@ -49,11 +49,9 @@ def connect_db():
         client = gspread.authorize(creds)
         sh = client.open_by_key(ID_DEL_FOGLIO)
         ws_main = sh.get_worksheet(0)
-        
         titoli_fogli = {w.title.strip().upper(): w for w in sh.worksheets()}
         ws_mem = titoli_fogli.get("MEMORIA_GIRO")
         ws_pot = titoli_fogli.get("POTENZIALI")
-        
         return ws_main, ws_mem, ws_pot
     except: return None, None, None
 
@@ -123,7 +121,7 @@ def carica_giro_da_foglio(sh_memoria):
     return None
 
 def get_geo_data(query_list):
-    time.sleep(0.5) 
+    time.sleep(0.4) 
     for q in query_list:
         try:
             url = f"https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?singleLine={requests.utils.quote(q)}&f=json&maxLocations=1"
@@ -165,8 +163,7 @@ if ws:
     c_att = next((c for c in df.columns if "ATTIVIT" in c), None)
     c_tel = next((c for c in df.columns if "TELEFONO" in c or "CELL" in c or "TEL" in c), None)
     c_piva = next((c for c in df.columns if "P.IVA" in c or "PIVA" in c), None)
-    
-    c_codice = next((c for c in df.columns if "CODICE" in c.upper() or "COD " in c.upper() or "COD." in c.upper() or c.upper() == "COD"), None)
+    c_codice = next((c for c in df.columns if "CODICE" in c.upper() or "COD " in c.upper() or "COD." in c.upper()), None)
     c_pos = next((c for c in df.columns if "POS" in c.upper() or "DB_POS" in c.upper() or "DB" in c.upper()), None)
     
     c_cap = next((c for c in df.columns if "CAP" in c), None)
@@ -176,16 +173,12 @@ if ws:
 
     if 'master_route' not in st.session_state and ws_mem:
         st.session_state.master_route = carica_giro_da_foglio(ws_mem)
-        
     if 'db_tasks' not in st.session_state and ws_mem: 
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
-    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.42</div>", unsafe_allow_html=True)
+    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.43</div>", unsafe_allow_html=True)
     tab1, tab2 = st.tabs(["🚗 GIRO VISITE & NUOVI", "🛰️ RADAR 150m & TELEMACO"])
 
-    # ==========================================
-    # TAB 1: GIRO VISITE 
-    # ==========================================
     with tab1:
         st.sidebar.markdown("### 🗺️ Opzioni Giro")
         indirizzo_start = st.sidebar.text_input("📍 Partenza:", value="Chianti, Sede")
@@ -200,101 +193,90 @@ if ws:
             
         st.sidebar.divider()
         st.sidebar.markdown("### 🎯 Sviluppo Rete")
-        num_potenziali = st.sidebar.slider("🆕 Potenziali da inserire:", 0, 5, 1, help="Quanti bar nuovi aggiungere a questo giro")
+        num_potenziali = st.sidebar.slider("🆕 Potenziali da inserire:", 0, 5, 1)
 
         if st.button("🔄 CALCOLA NUOVO GIRO OTTIMIZZATO", type="primary", use_container_width=True):
-            with st.spinner("IA sta calcolando la rotta includendo i nuovi obiettivi..."):
+            with st.spinner("IA sta ottimizzando la rotta per minimizzare i tempi..."):
                 sel_zona_clean = [c.strip().upper() for c in sel_zona_giro]
                 sel_cap_clean = [c.strip() for c in sel_cap_giro]
 
                 mask = ~df[c_vis].str.contains('SI|SÌ', case=False, na=False)
-                if sel_zona_clean: 
-                    mask &= df[c_com].astype(str).str.strip().str.upper().isin(sel_zona_clean)
-                if sel_cap_clean: 
-                    mask &= df[c_cap].astype(str).str.strip().isin(sel_cap_clean)
-                if only_premium and c_prem: 
-                    mask &= df[c_prem].astype(str).str.upper().str.contains('SI', na=False)
+                if sel_zona_clean: mask &= df[c_com].astype(str).str.strip().str.upper().isin(sel_zona_clean)
+                if sel_cap_clean: mask &= df[c_cap].astype(str).str.strip().isin(sel_cap_clean)
+                if only_premium and c_prem: mask &= df[c_prem].astype(str).str.upper().str.contains('SI', na=False)
                 
                 clienti_cg_completati = [n for n, tasks in st.session_state.db_tasks.items() if any("CG" in str(t).upper() for t in tasks)]
                 mask &= ~df[c_nom].isin(clienti_cg_completati)
                 
                 df_pulito = df[mask].drop_duplicates(subset=[c_nom])
-                pool = df_pulito.head(num_visite).to_dict('records')
+                raw_pool = df_pulito.head(num_visite).to_dict('records')
+                for p in raw_pool: p['is_potenziale'] = False
                 
-                for p in pool: p['is_potenziale'] = False
-                
-                # 🎯 ESTRATTORE INDISTRUTTIBILE (Basato sulla Posizione della Spunta)
+                # Aggiunta potenziali alla lista grezza
                 if num_potenziali > 0 and ws_pot:
                     try:
                         pot_data = ws_pot.get_all_values()
                         if len(pot_data) > 1:
-                            pot_trovati = []
                             for r_idx, row in enumerate(pot_data[1:]):
-                                # Trova l'indice della colonna dove c'è "✅ DISPONIBILE"
                                 idx_stato = next((i for i, cell in enumerate(row) if "✅" in str(cell).upper() or "DISPONIBILE" in str(cell).upper()), -1)
-                                
-                                if idx_stato >= 3: # Se ha trovato lo stato, sa che 3 posizioni prima c'è il NOME
+                                if idx_stato >= 3:
                                     data_visita = str(row[idx_stato + 1]).strip() if len(row) > idx_stato + 1 else ""
-                                    
                                     if not data_visita:
-                                        comune_pot = str(row[idx_stato - 1]).strip().upper()
-                                        addr_pot = str(row[idx_stato - 2]).strip()
-                                        nome_pot = str(row[idx_stato - 3]).strip()
-                                        piva_pot = str(row[idx_stato + 4]).strip() if len(row) > idx_stato + 4 else ""
+                                        com_pot = str(row[idx_stato - 1]).strip().upper()
+                                        ind_pot = str(row[idx_stato - 2]).strip()
+                                        nom_pot = str(row[idx_stato - 3]).strip()
                                         
-                                        passa_filtro_cap = True
+                                        p_cap = True
                                         if sel_cap_clean:
-                                            caps_in_addr = re.findall(r'\b\d{5}\b', addr_pot)
-                                            if caps_in_addr: 
-                                                if not any(cap in caps_in_addr for cap in sel_cap_clean): passa_filtro_cap = False
+                                            found_cap = re.findall(r'\b\d{5}\b', ind_pot)
+                                            if found_cap and not any(c in found_cap for c in sel_cap_clean): p_cap = False
                                         
-                                        passa_filtro_comune = True
-                                        if sel_zona_clean:
-                                            if not any(z in comune_pot for z in sel_zona_clean): passa_filtro_comune = False
-                                                
-                                        if passa_filtro_cap and passa_filtro_comune:
-                                            p_new = {
-                                                c_nom: nome_pot,
-                                                c_ind: addr_pot,
-                                                c_com: comune_pot,
-                                                "is_potenziale": True,
-                                                "PIVA": piva_pot,
-                                                "row_idx": r_idx + 2,
-                                                "idx_stato": idx_stato # Memorizzo per quando salverà
-                                            }
-                                            pot_trovati.append(p_new)
-                            
-                            if pot_trovati:
-                                pool.extend(pot_trovati[:num_potenziali])
-                            else:
-                                st.toast("⚠️ Nessun nuovo potenziale libero trovato con questi filtri Zona/CAP.", icon="⚠️")
-                    except Exception as e: 
-                        st.error(f"Errore tecnico nell'Estrattore Potenziali: {e}")
+                                        p_com = True
+                                        if sel_zona_clean and not any(z in com_pot for z in sel_zona_clean): p_com = False
+                                            
+                                        if p_cap and p_com:
+                                            raw_pool.append({
+                                                c_nom: nom_pot, c_ind: ind_pot, c_com: com_pot,
+                                                "is_potenziale": True, "PIVA": str(row[idx_stato + 4]).strip() if len(row) > idx_stato + 4 else "",
+                                                "row_idx": r_idx + 2, "idx_stato": idx_stato
+                                            })
+                                            if len([x for x in raw_pool if x['is_potenziale']]) >= num_potenziali: break
+                    except: pass
+
+                # --- 🧠 ALGORITMO DI OTTIMIZZAZIONE (NEAREST NEIGHBOR) ---
+                start_coords = get_geo_data([indirizzo_start, "Firenze, Italy"]) or SEDE_COORDS
                 
-                rotta = []
-                curr_t = datetime.now(TZ_ITALY).replace(hour=9, minute=0)
-                for p in pool:
-                    p['arr'] = curr_t
-                    
-                    if not p['is_potenziale']:
-                        p['tasks_completed'] = copy.deepcopy(st.session_state.db_tasks.get(p[c_nom], []))
-                    else:
-                        p['tasks_completed'] = []
-                    
+                # 1. Geocodifica tutti i punti selezionati
+                for p in raw_pool:
                     if not p['is_potenziale']:
                         la, lo = pulisci_coordinata_italy(p.get(c_lat), True), pulisci_coordinata_italy(p.get(c_lon), False)
                         p['coords'] = (la, lo) if la and lo else get_geo_data([f"{p[c_ind]}, {p[c_com]}, Italy"]) or SEDE_COORDS
                     else:
                         p['coords'] = get_geo_data([f"{p[c_ind]}, {p[c_com]}, Italy"]) or SEDE_COORDS
-                        
-                    rotta.append(p)
+                
+                # 2. Ordina per vicinanza progressiva
+                rotta_ottimizzata = []
+                punto_attuale = start_coords
+                rimanenti = raw_pool.copy()
+                
+                while rimanenti:
+                    prossimo = min(rimanenti, key=lambda x: geodesic(punto_attuale, x['coords']).meters)
+                    rotta_ottimizzata.append(prossimo)
+                    punto_attuale = prossimo['coords']
+                    rimanenti.remove(prossimo)
+                
+                # 3. Assegna orari
+                curr_t = datetime.now(TZ_ITALY).replace(hour=9, minute=0)
+                for p in rotta_ottimizzata:
+                    p['arr'] = curr_t
+                    p['tasks_completed'] = copy.deepcopy(st.session_state.db_tasks.get(p[c_nom], [])) if not p['is_potenziale'] else []
                     curr_t += timedelta(minutes=40)
                 
-                st.session_state.master_route = rotta
-                salva_giro_memoria(ws_mem, rotta)
+                st.session_state.master_route = rotta_ottimizzata
+                salva_giro_memoria(ws_mem, rotta_ottimizzata)
                 st.rerun()
 
-        # VISUALIZZAZIONE DEL GIRO
+        # VISUALIZZAZIONE
         if st.session_state.get('master_route'):
             for i, p in enumerate(st.session_state.master_route):
                 is_pot = p.get('is_potenziale', False)
@@ -307,317 +289,140 @@ if ws:
                 """, unsafe_allow_html=True)
                 
                 pronto = True
-                
                 if not is_pot:
                     msg_c, style_c = agente_strategico(p.get(c_note_sto, ''))
                     st.markdown(f"<div class='strategy-box' style='{style_c}'>{msg_c}</div>", unsafe_allow_html=True)
-                    
-                    tel = str(p.get(c_tel, '')).replace('nan', '').strip() if c_tel else ''
-                    piva = str(p.get(c_piva, '')).replace('nan', '').strip() if c_piva else ''
-                    cod = str(p.get(c_codice, '')).replace('nan', '').strip() if c_codice else ''
-                    pos = str(p.get(c_pos, '')).replace('nan', '').strip() if c_pos else ''
-                    cap_cliente = str(p.get(c_cap, '')).replace('nan', '').strip() if c_cap else ''
-                    
+                    tel = str(p.get(c_tel, '')).replace('nan', '').strip()
                     info_h = ""
-                    if piva: info_h += f"<span class='info-tag'>P.IVA: {piva}</span>"
-                    if cod: info_h += f"<span class='info-tag'>Cod: {cod}</span>"
-                    if pos: info_h += f"<span class='info-tag'>POS: {pos}</span>"
-                    if tel: info_h += f"<span class='info-tag'>📞 {tel}</span>"
+                    for k, v in {"P.IVA": p.get(c_piva), "Cod": p.get(c_codice), "POS": p.get(c_pos), "📞": tel}.items():
+                        if v and str(v).lower() != 'nan': info_h += f"<span class='info-tag'>{k}: {v}</span>"
                     st.markdown(f"<div class='info-row'>{info_h}</div>", unsafe_allow_html=True)
                     
                     tasks_done = p.get('tasks_completed', [])
                     if c_att and p.get(c_att):
-                        raw_tasks = [t.strip() for t in str(p[c_att]).split(',') if t.strip() and t.lower() != 'nan']
-                        t_list = list(dict.fromkeys(raw_tasks))
-                        
+                        t_list = list(dict.fromkeys([t.strip() for t in str(p[c_att]).split(',') if t.strip() and t.lower() != 'nan']))
                         if t_list:
                             st.markdown("**📝 Attività:**")
                             for t_idx, task in enumerate(t_list):
-                                safe_client_name = re.sub(r'[^a-zA-Z0-9]', '', str(p[c_nom]))
-                                safe_task = re.sub(r'[^a-zA-Z0-9]', '', task)
-                                key_name = f"chk_{safe_client_name}_{safe_task}_{t_idx}"
-                                
+                                key_name = f"chk_{re.sub(r'[^a-zA-Z0-9]', '', str(p[c_nom]))}_{t_idx}"
                                 is_chk = st.checkbox(task, value=(task in tasks_done), key=key_name)
                                 if is_chk and task not in tasks_done: tasks_done.append(task)
                                 elif not is_chk and task in tasks_done: tasks_done.remove(task)
                             p['tasks_completed'] = tasks_done
-                            
-                            if any("CG" in t.upper() for t in t_list):
-                                pronto = any("CG" in t.upper() for t in tasks_done)
-                else:
-                    cap_cliente = "" 
+                            if any("CG" in t.upper() for t in t_list): pronto = any("CG" in t.upper() for t in tasks_done)
                 
-                cap_display = f" (CAP: {cap_cliente})" if cap_cliente else ""
-                st.markdown(f"<div style='color:#94a3b8; font-weight:500; margin-bottom: 15px;'>📍 {p.get(c_ind, '')}, {p.get(c_com, '')}{cap_display}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='color:#94a3b8; font-weight:500; margin-bottom: 15px;'>📍 {p.get(c_ind, '')}, {p.get(c_com, '')}</div>", unsafe_allow_html=True)
                 
-                esito_selezionato = ""
+                esito_sel = ""
                 if is_pot:
-                    with st.expander("📝 Compila Dati Esplorazione", expanded=True):
-                        col_p1, col_p2 = st.columns(2)
-                        with col_p1:
-                            esito_selezionato = st.selectbox("Esito:", ["In Attesa", "Interessato", "Da richiamare", "Non interessato", "Chiuso"], key=f"esito_{i}")
-                            st.text_input("Scoring (A, B, C):", key=f"score_{i}")
-                        with col_p2:
-                            st.text_input("P.IVA Rilevata:", value=p.get("PIVA", ""), key=f"piva_{i}")
-                    
-                    pronto = esito_selezionato in ["Non interessato", "Chiuso"]
+                    with st.expander("📝 Compila Dati", expanded=True):
+                        c_p1, c_p2 = st.columns(2)
+                        with c_p1: esito_sel = st.selectbox("Esito:", ["In Attesa", "Interessato", "Da richiamare", "Non interessato", "Chiuso"], key=f"esi_{i}")
+                        with c_p2: st.text_input("Scoring (A,B,C):", key=f"sco_{i}")
+                    pronto = esito_sel in ["Non interessato", "Chiuso"]
                 
                 c_dest = p.get('coords', SEDE_COORDS)
-                if not isinstance(c_dest, (list, tuple)) or len(c_dest) < 2: c_dest = SEDE_COORDS
-                
-                # PULSANTIERA
+                c1, c2, c3 = st.columns([1, 1, 2])
+                with c1: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={c_dest[0]},{c_dest[1]}", use_container_width=True)
                 if not is_pot:
-                    c1, c2, c3 = st.columns([1, 1, 2])
-                    with c1: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={c_dest[0]},{c_dest[1]}", use_container_width=True)
                     with c2: 
                         if tel: st.link_button("📞 CHIAMA", f"tel:{tel}", use_container_width=True)
                         else: st.button("📞 NO TEL", disabled=True, use_container_width=True)
                     with c3: 
-                        btn_label = "✅ CONCLUDI VISITA" if pronto else "⚠️ MANCA SPUNTA CG"
-                        if st.button(btn_label, key=f"btn_close_{i}", use_container_width=True, type="primary" if pronto else "secondary"):
-                            if not pronto:
-                                st.warning("Per i clienti a DB devi spuntare 'CG' per concludere la visita!")
+                        if st.button("✅ CONCLUDI", key=f"bc_{i}", use_container_width=True, type="primary" if pronto else "secondary"):
+                            if not pronto: st.warning("Spunta 'CG'!")
                             else:
                                 st.session_state.db_tasks[p[c_nom]] = p['tasks_completed']
                                 if ws_mem: aggiorna_attivita_cliente(ws_mem, p[c_nom], p['tasks_completed'])
-                                
                                 try:
-                                    riga_cliente = df.index[df[c_nom] == p[c_nom]].tolist()[0] + 2
-                                    col_visita = list(df.columns).index(c_vis) + 1
-                                    ws.update_cell(riga_cliente, col_visita, "SI")
+                                    r_idx = df.index[df[c_nom] == p[c_nom]].tolist()[0] + 2
+                                    ws.update_cell(r_idx, list(df.columns).index(c_vis)+1, "SI")
                                 except: pass
-                                
                                 st.session_state.master_route.pop(i)
                                 salva_giro_memoria(ws_mem, st.session_state.master_route)
                                 st.rerun()
                 else:
-                    c1, c2 = st.columns(2)
-                    with c1: st.link_button("🚙 NAVIGA", f"https://www.google.com/maps/dir/?api=1&destination={c_dest[0]},{c_dest[1]}", use_container_width=True)
-                    with c2: 
-                        btn_label = "✅ SALVA E CONCLUDI" if pronto else "⚠️ SELEZIONA ESITO"
-                        if st.button(btn_label, key=f"btn_close_{i}", use_container_width=True, type="primary" if pronto else "secondary"):
-                            if not pronto:
-                                st.warning("Per chiudere questo potenziale, l'esito deve essere 'Non interessato' o 'Chiuso'.")
+                    with c3:
+                        if st.button("✅ SALVA POT.", key=f"bc_{i}", use_container_width=True, type="primary" if pronto else "secondary"):
+                            if not pronto: st.warning("Imposta esito conclusivo!")
                             else:
                                 if ws_pot:
-                                    riga = p['row_idx']
-                                    idx_stato = p.get('idx_stato', 4) # Fallback alla colonna 4 se manca
-                                    
-                                    data_visita = datetime.now(TZ_ITALY).strftime("%d/%m/%Y")
-                                    scoring = st.session_state.get(f"score_{i}", "")
-                                    piva = st.session_state.get(f"piva_{i}", "")
-                                    
-                                    try:
-                                        # Scrive le celle in base alla posizione esatta dello STATO
-                                        ws_pot.update_cell(riga, idx_stato + 2, data_visita)
-                                        ws_pot.update_cell(riga, idx_stato + 3, esito_selezionato)
-                                        ws_pot.update_cell(riga, idx_stato + 4, scoring)
-                                        ws_pot.update_cell(riga, idx_stato + 5, piva)
+                                    try: ws_pot.update_cell(p['row_idx'], p['idx_stato']+2, datetime.now(TZ_ITALY).strftime("%d/%m/%Y"))
                                     except: pass
-                                    
-                                    st.toast(f"Dati salvati per {p[c_nom]}!", icon="💾")
-                                
                                 st.session_state.master_route.pop(i)
                                 salva_giro_memoria(ws_mem, st.session_state.master_route)
                                 st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            # 🎯 INNESTO DINAMICO (Potenziato!)
+            # INNESTO DINAMICO
             st.divider()
-            with st.expander("➕ AGGIUNGI CLIENTE AL VOLO (Da Database o Potenziali)"):
-                st.markdown("Cerca un cliente o un potenziale libero per aggiungerlo in coda.")
-                
+            with st.expander("➕ AGGIUNGI CLIENTE AL VOLO"):
                 nomi_nel_giro = [p[c_nom] for p in st.session_state.master_route]
-                clienti_cg_completati = [n for n, tasks in st.session_state.db_tasks.items() if any("CG" in str(t).upper() for t in tasks)]
-                
-                mask_aggiunta = ~df[c_nom].isin(nomi_nel_giro) & ~df[c_nom].isin(clienti_cg_completati)
-                clienti_disponibili = sorted(df[mask_aggiunta][c_nom].dropna().unique().tolist())
-                
-                potenziali_disponibili = []
-                if ws_pot:
-                    try:
-                        pot_data = ws_pot.get_all_values()
-                        if len(pot_data) > 1:
-                            for r_idx, row in enumerate(pot_data[1:]):
-                                idx_stato = next((i for i, cell in enumerate(row) if "✅" in str(cell).upper() or "DISPONIBILE" in str(cell).upper()), -1)
-                                if idx_stato >= 3:
-                                    data_visita = str(row[idx_stato + 1]).strip() if len(row) > idx_stato + 1 else ""
-                                    if not data_visita:
-                                        nome_pot = str(row[idx_stato - 3]).strip()
-                                        if nome_pot and nome_pot not in nomi_nel_giro:
-                                            comune_pot = str(row[idx_stato - 1]).strip().title()
-                                            potenziali_disponibili.append(f"🆕 {nome_pot} ({comune_pot}) [POTENZIALE]")
-                    except: pass
-                
-                tutti_disponibili = [""] + potenziali_disponibili + clienti_disponibili
-                cliente_da_aggiungere = st.selectbox("Seleziona il cliente da inserire:", tutti_disponibili)
-                
-                if st.button("⚡ INSERISCI ORA", type="primary") and cliente_da_aggiungere:
-                    with st.spinner("Calcolo rotta per il nuovo cliente..."):
-                        p_new = {}
-                        is_pot_selezionato = "🆕 " in cliente_da_aggiungere and "[POTENZIALE]" in cliente_da_aggiungere
-                        
-                        if is_pot_selezionato:
-                            clean_name = cliente_da_aggiungere.split(" (")[0].replace("🆕 ", "").strip()
-                            pot_data = ws_pot.get_all_values()
-                            for r_idx, row in enumerate(pot_data[1:]):
-                                idx_stato = next((i for i, cell in enumerate(row) if "✅" in str(cell).upper() or "DISPONIBILE" in str(cell).upper()), -1)
-                                if idx_stato >= 3:
-                                    nome_pot = str(row[idx_stato - 3]).strip()
-                                    if nome_pot == clean_name:
-                                        p_new = {
-                                            c_nom: clean_name,
-                                            c_ind: str(row[idx_stato - 2]).strip(),
-                                            c_com: str(row[idx_stato - 1]).strip().upper(),
-                                            "is_potenziale": True,
-                                            "PIVA": str(row[idx_stato + 4]).strip() if len(row) > idx_stato + 4 else "",
-                                            "row_idx": r_idx + 2,
-                                            "idx_stato": idx_stato
-                                        }
-                                        break
-                        else:
-                            riga_cliente = df[df[c_nom] == cliente_da_aggiungere].iloc[0]
-                            p_new = riga_cliente.to_dict()
-                            p_new['is_potenziale'] = False
-                        
-                        if p_new:
-                            p_new['tasks_completed'] = copy.deepcopy(st.session_state.db_tasks.get(p_new[c_nom], [])) if not p_new.get('is_potenziale') else []
-                            
-                            if len(st.session_state.master_route) > 0:
-                                ultimo_orario = st.session_state.master_route[-1]['arr']
-                                if isinstance(ultimo_orario, str): 
-                                    ultimo_orario = datetime.strptime(ultimo_orario, "%Y-%m-%d %H:%M:%S")
-                                p_new['arr'] = ultimo_orario + timedelta(minutes=40)
-                            else:
-                                p_new['arr'] = datetime.now(TZ_ITALY)
-                                
-                            la, lo = pulisci_coordinata_italy(p_new.get(c_lat), True), pulisci_coordinata_italy(p_new.get(c_lon), False)
-                            p_new['coords'] = (la, lo) if la and lo else get_geo_data([f"{p_new[c_ind]}, {p_new[c_com]}, Italy"]) or SEDE_COORDS
-                            
-                            st.session_state.master_route.append(p_new)
-                            salva_giro_memoria(ws_mem, st.session_state.master_route)
-                            st.toast(f"✅ Aggiunto al giro!", icon="🎯")
-                            time.sleep(1)
-                            st.rerun()
+                clienti_cg_completati = [n for n, t in st.session_state.db_tasks.items() if any("CG" in str(x).upper() for x in t)]
+                disponibili = sorted(df[~df[c_nom].isin(nomi_nel_giro) & ~df[c_nom].isin(clienti_cg_completati)][c_nom].dropna().unique().tolist())
+                scelto = st.selectbox("Seleziona:", [""] + disponibili)
+                if st.button("⚡ INSERISCI", type="primary") and scelto:
+                    p_new = df[df[c_nom] == scelto].iloc[0].to_dict()
+                    p_new['is_potenziale'] = False
+                    p_new['tasks_completed'] = copy.deepcopy(st.session_state.db_tasks.get(scelto, []))
+                    p_new['arr'] = (st.session_state.master_route[-1]['arr'] + timedelta(minutes=40)) if st.session_state.master_route else datetime.now(TZ_ITALY)
+                    la, lo = pulisci_coordinata_italy(p_new.get(c_lat), True), pulisci_coordinata_italy(p_new.get(c_lon), False)
+                    p_new['coords'] = (la, lo) if la and lo else get_geo_data([f"{p_new[c_ind]}, {p_new[c_com]}, Italy"]) or SEDE_COORDS
+                    st.session_state.master_route.append(p_new)
+                    salva_giro_memoria(ws_mem, st.session_state.master_route)
+                    st.rerun()
 
-    # ==========================================
-    # TAB 2: RADAR & TELEMACO
-    # ==========================================
+    # TAB 2: RADAR
     with tab2:
-        file_tel = st.file_uploader("📂 Carica File Telemaco (Excel/CSV)", type=['xlsx', 'csv'])
+        file_tel = st.file_uploader("📂 Telemaco", type=['xlsx', 'csv'])
         if file_tel:
-            df_tel = pd.read_excel(file_tel, dtype=str) if file_tel.name.endswith('.xlsx') else pd.read_csv(file_tel, sep=None, engine='python', dtype=str)
+            df_t = pd.read_excel(file_tel, dtype=str) if file_tel.name.endswith('.xlsx') else pd.read_csv(file_tel, sep=None, engine='python', dtype=str)
+            c1, c2, c3, c4 = st.columns(4)
+            with c1: col_n = st.selectbox("Nome:", df_t.columns, index=0)
+            with c2: col_i = st.selectbox("Indirizzo:", df_t.columns, index=1)
+            with c3: col_c = st.selectbox("Comune:", df_t.columns, index=2)
+            with c4: col_cap_t = st.selectbox("CAP:", ["Nessuna"] + list(df_t.columns))
             
-            c_t1, c_t2, c_t3, c_t4 = st.columns(4)
-            with c_t1: col_nome_tel = st.selectbox("Colonna Nome:", df_tel.columns, index=0)
-            idx_ind_tel = next((i for i, c in enumerate(df_tel.columns) if "COMPLETO" in c.upper() or "INDIRIZZO" in c.upper()), 0)
-            with c_t2: col_ind_tel = st.selectbox("Colonna Indirizzo:", df_tel.columns, index=idx_ind_tel)
-            with c_t3: col_com_tel = st.selectbox("Colonna Comune:", df_tel.columns, index=next((i for i, c in enumerate(df_tel.columns) if "COMUNE" in c.upper()), 0))
-            
-            idx_cap_tel_default = next((i for i, c in enumerate(df_tel.columns) if "CAP" in c.upper()), -1)
-            opzioni_cap = ["Nessuna"] + list(df_tel.columns)
-            with c_t4: col_cap_tel = st.selectbox("Colonna CAP (Consigliata):", opzioni_cap, index=idx_cap_tel_default + 1 if idx_cap_tel_default != -1 else 0)
-
-            modalita_cecchino = st.toggle("🎯 MODALITÀ CECCHINO (Filtra solo comuni del tuo database)", value=True)
-            comuni_miei_puliti = [pulisci_nome(c) for c in df[c_com].unique() if str(c).strip()]
-            
-            if not modalita_cecchino:
-                comuni_file = sorted(df_tel[col_com_tel].unique())
-                sel_comuni_radar = st.multiselect("🌍 Seleziona Comuni da scansionare:", comuni_file, default=comuni_file[:3])
-            else:
-                sel_comuni_radar = comuni_miei_puliti
-
-            if st.button("🚀 AVVIA RADAR 150m", type="primary", use_container_width=True):
-                df_prem = df[df[c_prem].astype(str).str.upper().str.contains("SI", na=False)].copy() if c_prem else df.head(0)
-                premium_coords = []
-                for _, pr in df_prem.iterrows():
-                    la, lo = pulisci_coordinata_italy(pr.get(c_lat),True), pulisci_coordinata_italy(pr.get(c_lon),False)
-                    if la: premium_coords.append((la, lo))
+            if st.button("🚀 AVVIA RADAR 150m (PEDONALE)", type="primary", use_container_width=True):
+                prem_coords = []
+                if c_prem:
+                    for _, pr in df[df[c_prem].astype(str).str.upper().str.contains("SI")].iterrows():
+                        la, lo = pulisci_coordinata_italy(pr.get(c_lat),True), pulisci_coordinata_italy(pr.get(c_lon),False)
+                        if la: prem_coords.append((la, lo))
                 
-                risultati_ok = []
-                scarti = {"ZONA": 0, "CLIENTI": 0, "RADAR": 0, "MAPPA": 0}
-                nomi_miei_puliti = [pulisci_nome(n) for n in df[c_nom].unique()]
+                results, scarti = [], {"ZONA": 0, "CLIENTI": 0, "RADAR": 0, "MAPPA": 0}
+                nomi_miei = [pulisci_nome(n) for n in df[c_nom].unique()]
                 
                 prog = st.progress(0)
-                for i, r_tel in df_tel.iterrows():
-                    prog.progress((i+1)/len(df_tel))
-                    com_t_raw = str(r_tel[col_com_tel]).strip()
-                    com_t_pulito = pulisci_nome(com_t_raw)
-                    nome_t_pulito = pulisci_nome(r_tel[col_nome_tel])
+                for idx, r_t in df_t.iterrows():
+                    prog.progress((idx+1)/len(df_t))
+                    nome_t = pulisci_nome(r_t[col_n])
+                    if nome_t in nomi_miei: scarti["CLIENTI"] += 1; continue
                     
-                    if modalita_cecchino:
-                        if com_t_pulito not in comuni_miei_puliti:
-                            scarti["ZONA"] += 1; continue
-                    else:
-                        if com_t_raw not in sel_comuni_radar:
-                            scarti["ZONA"] += 1; continue
-
-                    if nome_t_pulito in nomi_miei_puliti:
-                        scarti["CLIENTI"] += 1; continue
+                    ind_str = str(r_t[col_i]).strip()
+                    if col_cap_t != "Nessuna": ind_str += f", {r_t[col_cap_t]}"
                     
-                    ind_t = str(r_tel.get(col_ind_tel, '')).strip()
-                    if "Indirizzo" in ind_t or ind_t in ["", "nan"]:
-                        try:
-                            via = str(r_tel.iloc[7]).replace('nan', '').strip()
-                            civ = str(r_tel.iloc[8]).replace('nan', '').strip()
-                            ind_t = f"{via} {civ}".strip()
-                        except: ind_t = ""
-                        
-                    if col_cap_tel != "Nessuna":
-                        cap_val = str(r_tel.get(col_cap_tel, '')).replace('.0', '').replace('nan', '').strip().zfill(5)
-                        if cap_val and cap_val not in ind_t: ind_t = f"{ind_t}, {cap_val}"
-                    
-                    t_c = get_geo_data([f"{ind_t}, {com_t_raw}, Italy", f"{com_t_raw}, Italy"])
+                    t_c = get_geo_data([f"{ind_str}, {r_t[col_c]}, Italy"])
                     if t_c:
                         vicino = False
-                        for pc in premium_coords:
-                            dist_aria = geodesic(t_c, pc).meters
-                            if dist_aria <= 150:
-                                dist_pedonale = calcola_distanza_pedonale(t_c, pc)
-                                if dist_pedonale <= 150:
-                                    vicino = True
-                                    break
-                        
+                        for pc in prem_coords:
+                            if geodesic(t_c, pc).meters <= 150:
+                                if calcola_distanza_pedonale(t_c, pc) <= 150:
+                                    vicino = True; break
                         if vicino: scarti["RADAR"] += 1
-                        else: risultati_ok.append([nome_t_pulito, ind_t, com_t_raw, "✅ DISPONIBILE"])
+                        else: results.append([datetime.now(TZ_ITALY).strftime("%d/%m/%Y"), nome_t, ind_str, r_t[col_c], "✅ DISPONIBILE"])
                     else: scarti["MAPPA"] += 1
-
-                st.session_state.radar_risultati = risultati_ok
+                
+                st.session_state.radar_risultati = results
                 st.session_state.radar_scarti = scarti
 
-            if st.session_state.radar_scarti is not None:
-                scarti = st.session_state.radar_scarti
-                st.markdown("### 📊 Report Scansione")
-                c1,c2,c3,c4 = st.columns(4)
-                c1.metric("Fuori Zona", scarti["ZONA"])
-                c2.metric("Già Clienti", scarti["CLIENTI"])
-                c3.metric("Troppo Vicini (<150m)", scarti["RADAR"])
-                c4.metric("Errori Mappa", scarti["MAPPA"])
-                
-                if st.session_state.radar_risultati:
-                    df_res = pd.DataFrame(st.session_state.radar_risultati, columns=["CLIENTE", "INDIRIZZO", "COMUNE", "STATO"])
-                    st.success(f"🎯 Radar completato! Trovati {len(st.session_state.radar_risultati)} bar validi.")
-                    
-                    if st.button("💾 SALVA TUTTI IN 'POTENZIALI'", use_container_width=True, type="primary"):
-                        if not ws_pot:
-                            st.error("🚨 ERRORE: Non trovo il foglio 'POTENZIALI'.")
-                        else:
-                            with st.spinner("Guarigione del Foglio e Scrittura sul database in corso..."):
-                                try:
-                                    # GUARIGIONE DELLE INTESTAZIONI
-                                    ws_pot.update("A1:I1", [["DATA_INS", "CLIENTE", "INDIRIZZO", "COMUNE", "STATO", "DATA_VISITA", "ESITO", "SCORING", "PIVA"]])
-                                    
-                                    nuove_righe = []
-                                    oggi_str = datetime.now(TZ_ITALY).strftime("%d/%m/%Y")
-                                    for row in st.session_state.radar_risultati:
-                                        nuove_righe.append([oggi_str, row[0], row[1], row[2], row[3], "", "", "", ""])
-                                    
-                                    if nuove_righe:
-                                        ws_pot.append_rows(nuove_righe, value_input_option='USER_ENTERED')
-                                        st.success("✅ Salvataggio completato! Intestazioni rigenerate con successo.")
-                                        st.session_state.radar_risultati = None 
-                                        st.session_state.radar_scarti = None
-                                        time.sleep(2)
-                                        st.rerun()
-                                except Exception as e:
-                                    st.error(f"⚠️ Errore tecnico durante il salvataggio: {e}")
+            if st.session_state.get('radar_scarti'):
+                s = st.session_state.radar_scarti
+                st.write(f"✅ Trovati: {len(st.session_state.radar_risultati)} | ❌ Troppo vicini: {s['RADAR']} | 🗺️ Errori mappa: {s['MAPPA']}")
+                if st.session_state.radar_risultati and st.button("💾 SALVA IN POTENZIALI"):
+                    try:
+                        ws_pot.update("A1:I1", [["DATA_INS", "CLIENTE", "INDIRIZZO", "COMUNE", "STATO", "DATA_VISITA", "ESITO", "SCORING", "PIVA"]])
+                        ws_pot.append_rows(st.session_state.radar_risultati)
+                        st.success("Salvati!")
+                        st.session_state.radar_risultati = None
+                    except: st.error("Errore!")
