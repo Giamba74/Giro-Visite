@@ -253,7 +253,7 @@ if ws:
     if 'db_tasks' not in st.session_state and ws_mem: 
         st.session_state.db_tasks = carica_storico_attivita(ws_mem)
 
-    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.47</div>", unsafe_allow_html=True)
+    st.markdown("<div class='app-header'>🚀 BRIGHTSTAR CRM PRO v5.48</div>", unsafe_allow_html=True)
     tab1, tab2 = st.tabs(["🚗 GIRO VISITE & NUOVI", "🛰️ RADAR 150m & TELEMACO"])
 
     with tab1:
@@ -453,11 +453,14 @@ if ws:
                                 st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
 
+            # --- INNESTO DINAMICO CORRETTO ---
             st.divider()
             with st.expander("➕ AGGIUNGI CLIENTE AL VOLO"):
                 nomi_nel_giro = [p[c_nom] for p in st.session_state.master_route]
                 clienti_cg_completati = [n for n, t in st.session_state.db_tasks.items() if any("CG" in str(x).upper() for x in t)]
-                disponibili = sorted(df[~df[c_nom].isin(nomi_nel_giro) & ~df[c_nom].isin(clienti_cg_completati)][c_nom].dropna().unique().tolist())
+                
+                # BUGFIX: La variabile si chiama 'clienti_disponibili' e non 'disponibili'
+                clienti_disponibili = sorted(df[~df[c_nom].isin(nomi_nel_giro) & ~df[c_nom].isin(clienti_cg_completati)][c_nom].dropna().unique().tolist())
                 
                 potenziali_disponibili = []
                 if ws_pot:
@@ -485,81 +488,4 @@ if ws:
                     if is_pot_selezionato:
                         clean_name = scelto.split(" (")[0].replace("🆕 ", "").strip()
                         pot_data = ws_pot.get_all_values()
-                        for r_idx, row in enumerate(pot_data[1:]):
-                            idx_stato = next((i for i, cell in enumerate(row) if "✅" in str(cell).upper() or "DISPONIBILE" in str(cell).upper()), -1)
-                            if idx_stato >= 3:
-                                if str(row[idx_stato - 3]).strip() == clean_name:
-                                    p_new = {
-                                        c_nom: clean_name, c_ind: str(row[idx_stato - 2]).strip(), c_com: str(row[idx_stato - 1]).strip().upper(),
-                                        "is_potenziale": True, "PIVA": str(row[idx_stato + 4]).strip() if len(row) > idx_stato + 4 else "",
-                                        "row_idx": r_idx + 2, "idx_stato": idx_stato
-                                    }
-                                    break
-                    else:
-                        p_new = df[df[c_nom] == scelto].iloc[0].to_dict()
-                        p_new['is_potenziale'] = False
-                    
-                    if p_new:
-                        p_new['tasks_completed'] = copy.deepcopy(st.session_state.db_tasks.get(p_new[c_nom], [])) if not p_new.get('is_potenziale') else []
-                        p_new['arr'] = (st.session_state.master_route[-1]['arr'] + timedelta(minutes=40)) if st.session_state.master_route else datetime.now(TZ_ITALY)
-                        la, lo = pulisci_coordinata_italy(p_new.get(c_lat), True), pulisci_coordinata_italy(p_new.get(c_lon), False)
-                        p_new['coords'] = (la, lo) if la and lo else get_geo_data([f"{p_new[c_ind]}, {p_new[c_com]}, Italy"]) or SEDE_COORDS
-                        st.session_state.master_route.append(p_new)
-                        salva_giro_memoria(ws_mem, st.session_state.master_route)
-                        st.rerun()
-
-    with tab2:
-        file_tel = st.file_uploader("📂 Telemaco", type=['xlsx', 'csv'])
-        if file_tel:
-            df_t = pd.read_excel(file_tel, dtype=str) if file_tel.name.endswith('.xlsx') else pd.read_csv(file_tel, sep=None, engine='python', dtype=str)
-            c1, c2, c3, c4 = st.columns(4)
-            with c1: col_n = st.selectbox("Nome:", df_t.columns, index=0)
-            with c2: col_i = st.selectbox("Indirizzo:", df_t.columns, index=1)
-            with c3: col_c = st.selectbox("Comune:", df_t.columns, index=2)
-            with c4: col_cap_t = st.selectbox("CAP:", ["Nessuna"] + list(df_t.columns))
-            
-            modalita_cecchino = st.toggle("🎯 MODALITÀ CECCHINO (Filtra solo comuni del database)", value=True)
-            comuni_miei = [pulisci_nome(c) for c in df[c_com].unique() if str(c).strip()]
-            sel_comuni_radar = comuni_miei if modalita_cecchino else st.multiselect("🌍 Comuni da scansionare:", sorted(df_t[col_c].unique()))
-
-            if st.button("🚀 AVVIA RADAR 150m (PEDONALE)", type="primary", use_container_width=True):
-                prem_coords = []
-                if c_prem:
-                    for _, pr in df[df[c_prem].astype(str).str.upper().str.contains("SI")].iterrows():
-                        la, lo = pulisci_coordinata_italy(pr.get(c_lat),True), pulisci_coordinata_italy(pr.get(c_lon),False)
-                        if la: prem_coords.append((la, lo))
-                
-                results, scarti = [], {"ZONA": 0, "CLIENTI": 0, "RADAR": 0, "MAPPA": 0}
-                prog = st.progress(0)
-                
-                for idx, r_t in df_t.iterrows():
-                    prog.progress((idx+1)/len(df_t))
-                    nome_t = pulisci_nome(r_t[col_n])
-                    if nome_t in [pulisci_nome(n) for n in df[c_nom].unique()]: scarti["CLIENTI"] += 1; continue
-                    
-                    if pulisci_nome(r_t[col_c]) not in sel_comuni_radar: scarti["ZONA"] += 1; continue
-                    
-                    ind_str = str(r_t[col_i]).strip()
-                    if col_cap_t != "Nessuna": ind_str += f", {r_t[col_cap_t]}"
-                    
-                    t_c = get_geo_data([f"{ind_str}, {r_t[col_c]}, Italy"])
-                    if t_c:
-                        vicino = False
-                        for pc in prem_coords:
-                            if geodesic(t_c, pc).meters <= 150 and calcola_distanza_pedonale(t_c, pc) <= 150:
-                                vicino = True; break
-                        if vicino: scarti["RADAR"] += 1
-                        else: results.append([datetime.now(TZ_ITALY).strftime("%d/%m/%Y"), nome_t, ind_str, r_t[col_c], "✅ DISPONIBILE"])
-                    else: scarti["MAPPA"] += 1
-                
-                st.session_state.radar_risultati, st.session_state.radar_scarti = results, scarti
-
-            if st.session_state.get('radar_scarti'):
-                s = st.session_state.radar_scarti
-                st.write(f"✅ Trovati: {len(st.session_state.radar_risultati)} | ❌ Troppo vicini: {s['RADAR']} | 🗺️ Errori mappa: {s['MAPPA']}")
-                if st.session_state.radar_risultati and st.button("💾 SALVA IN POTENZIALI"):
-                    try:
-                        ws_pot.update("A1:I1", [["DATA_INS", "CLIENTE", "INDIRIZZO", "COMUNE", "STATO", "DATA_VISITA", "ESITO", "SCORING", "PIVA"]])
-                        ws_pot.append_rows(st.session_state.radar_risultati)
-                        st.success("Salvati!"); st.session_state.radar_risultati = None
-                    except: st.error("Errore di salvataggio!")
+                        for r
